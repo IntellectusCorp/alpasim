@@ -33,18 +33,18 @@ popd > /dev/null
 
 
 # Download vavam models if not already present
-VAVAM_DIR="${REPO_ROOT}/data/drivers"
-if [[ ! -d "${VAVAM_DIR}" ]]; then
-    echo "Downloading vavam assets..."
-    ./data/download_vavam_assets.sh --model vavam-b
-    if [[ $? -ne 0 ]]; then
-        echo "❌ Failed to download VAVAM models. Exiting."
-        rm -rf "${VAVAM_DIR}"
-        return 1
-    fi
-else
-    echo "VAVAM models already present. Skipping download."
-fi
+#VAVAM_DIR="${REPO_ROOT}/data/drivers"
+#if [[ ! -d "${VAVAM_DIR}" ]]; then
+#    echo "Downloading vavam assets..."
+#    ./data/download_vavam_assets.sh --model vavam-b
+#    if [[ $? -ne 0 ]]; then
+#        echo "❌ Failed to download VAVAM models. Exiting."
+#        rm -rf "${VAVAM_DIR}"
+#        return 1
+#    fi
+#else
+#echo "VAVAM models already present. Skipping download."
+#fi
 
 # Install Wizard in development mode
 echo "Installing Wizard in development mode..."
