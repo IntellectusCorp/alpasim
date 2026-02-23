@@ -176,6 +176,22 @@ class QVec:
             quat=np.array([getattr(grpc_pose.quat, dim) for dim in "xyzw"]),
         )
 
+    def as_dds_pose(self):
+        from alpasim_dds.types.common import Pose as DdsPose, Vec3 as DdsVec3, Quat as DdsQuat
+
+        assert self.batch_size == ()
+        return DdsPose(
+            vec=DdsVec3(x=float(self.vec3[0]), y=float(self.vec3[1]), z=float(self.vec3[2])),
+            quat=DdsQuat(x=float(self.quat[0]), y=float(self.quat[1]), z=float(self.quat[2]), w=float(self.quat[3])),
+        )
+
+    @staticmethod
+    def from_dds_pose(dds_pose) -> "QVec":
+        return QVec(
+            vec3=np.array([dds_pose.vec.x, dds_pose.vec.y, dds_pose.vec.z]),
+            quat=np.array([dds_pose.quat.x, dds_pose.quat.y, dds_pose.quat.z, dds_pose.quat.w]),
+        )
+
     @property
     def yaw(self) -> np.ndarray:
         return R.from_quat(self.quat).as_euler("xyz")[..., 2]

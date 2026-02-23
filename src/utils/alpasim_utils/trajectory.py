@@ -225,6 +225,29 @@ class Trajectory:
             ]
         )
 
+    def to_dds(self):
+        from alpasim_dds.types.common import PoseAtTime as DdsPoseAtTime, Trajectory as DdsTrajectory
+
+        return DdsTrajectory(
+            poses=[
+                DdsPoseAtTime(timestamp_us=int(ts), pose=qvec.as_dds_pose())
+                for ts, qvec in zip(self.timestamps_us, self.poses)
+            ]
+        )
+
+    @staticmethod
+    def from_dds(dds_trajectory) -> Trajectory:
+        if not dds_trajectory.poses:
+            return Trajectory.create_empty()
+
+        timestamps_us = np.array(
+            [p.timestamp_us for p in dds_trajectory.poses], dtype=np.uint64
+        )
+        poses = QVec.stack(
+            [QVec.from_dds_pose(p.pose) for p in dds_trajectory.poses], axis=0
+        )
+        return Trajectory(timestamps_us=timestamps_us, poses=poses)
+
     def clone(self) -> Trajectory:
         return Trajectory(self.timestamps_us.copy(), self.poses.clone())
 

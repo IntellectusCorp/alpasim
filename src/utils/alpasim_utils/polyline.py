@@ -350,6 +350,17 @@ class Polyline:
             )
         return route
 
+    def to_dds_route(self, timestamp_us: int):
+        from alpasim_dds.types.common import Vec3 as DdsVec3
+        from alpasim_dds.types.egodriver import Route as DdsRoute
+
+        if self.dimension != 3:
+            raise ValueError("to_dds_route is only defined for 3D polylines")
+        return DdsRoute(
+            timestamp_us=timestamp_us,
+            waypoints=[DdsVec3(x=float(wp[0]), y=float(wp[1]), z=float(wp[2])) for wp in self.points],
+        )
+
     def zero_out_z(self) -> "Polyline":
         """Return a new polyline with the z coordinate set to zero (3D only)."""
         if self.dimension != 3:

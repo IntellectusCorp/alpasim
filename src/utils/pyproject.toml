@@ -8,6 +8,7 @@ version = "0.52.0"
 description = "Utility functions for Alpamayo Sim"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+  "alpasim_dds",
   "alpasim_grpc",
   "dataclasses-json>=0.6.7",
   "typing-inspect>=0.9.0",  # Required for dataclasses-json with mypy-extensions>=1.0
@@ -31,6 +32,7 @@ name = "Michal Tyszkiewicz"
 email = "mtyszkiewicz@nvidia.com"
 
 [tool.uv.sources]
+alpasim_dds = {workspace = true}
 alpasim_grpc = {workspace = true}
 
 [tool.setuptools.packages.find]

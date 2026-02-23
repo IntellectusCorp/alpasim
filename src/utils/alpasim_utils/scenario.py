@@ -59,6 +59,10 @@ class AABB:
     def to_grpc(self) -> ProtoAABB:
         return ProtoAABB(size_x=self.x, size_y=self.y, size_z=self.z)
 
+    def to_dds(self):
+        from alpasim_dds.types.common import AABB as DdsAABB
+        return DdsAABB(size_x=self.x, size_y=self.y, size_z=self.z)
+
 
 @dataclass
 class CameraId:
