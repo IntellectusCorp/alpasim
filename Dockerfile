@@ -19,7 +19,7 @@ ENV UV_LINK_MODE=copy
 WORKDIR /repo/src/grpc
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    NETRC=/root/.netrc uv sync
+    NETRC=/root/.netrc uv sync --package alpasim_grpc
 RUN uv run compile-protos --no-sync
 
 WORKDIR /repo
