@@ -5,7 +5,7 @@
 !src/runtime/**
 !src/grpc/**
 !src/utils/**
-!src/ddb/**
+!src/dds/**
 !src/eval/**
 !src/avmf/**
 !src/physics/**
