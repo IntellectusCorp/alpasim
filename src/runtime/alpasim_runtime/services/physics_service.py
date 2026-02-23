@@ -1,37 +1,32 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025-2026 NVIDIA Corporation
-
-"""Physics service implementation."""
+"""Physics service implementation (DDS)."""
 
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple, Type
+from typing import Dict, List, Tuple
 
-from alpasim_grpc.v0.common_pb2 import Pose
+from alpasim_dds.endpoints.physics import PhysicsEndpoints
+from alpasim_dds.types.common import AvailableScenesRequest
+from alpasim_dds.types.physics import (
+    EgoData,
+    OtherObject,
+    PhysicsGroundIntersectionRequest,
+    PosePair,
+)
 from alpasim_grpc.v0.logging_pb2 import LogEntry
-from alpasim_grpc.v0.physics_pb2 import PhysicsGroundIntersectionRequest
-from alpasim_grpc.v0.physics_pb2_grpc import PhysicsServiceStub
 from alpasim_runtime.config import PhysicsUpdateMode, ScenarioConfig
-from alpasim_runtime.services.service_base import ServiceBase
-from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
+from alpasim_runtime.services.service_base import DDSServiceBase, WILDCARD_SCENE_ID
+from alpasim_utils.dds_to_proto import physics_request_to_proto, physics_response_to_proto
 from alpasim_utils.qvec import QVec
 from alpasim_utils.scenario import AABB
 
 logger = logging.getLogger(__name__)
 
 
-class PhysicsService(ServiceBase[PhysicsServiceStub]):
-    """
-    Physics service implementation that handles both real and skip modes.
+class PhysicsService(DDSServiceBase):
+    """Physics service — DDS 기반. ground intersection 계산을 담당."""
 
-    Physics is responsible for ground intersection calculations,
-    determining how objects interact with the ground plane.
-    """
-
-    @property
-    def stub_class(self) -> Type[PhysicsServiceStub]:
-        return PhysicsServiceStub
+    endpoints_class = PhysicsEndpoints
 
     async def ground_intersection(
         self,
@@ -44,21 +39,9 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
         ego_aabb: AABB,
         skip: bool = False,
     ) -> Tuple[QVec, Dict[str, QVec]]:
-        """
-        Calculate ground intersection for ego and traffic vehicles.
-
-        Args:
-            skip: If True, return traffic poses unchanged without
-                making a gRPC call. Use this when objects are following
-                trajectories that already have correct physics applied (e.g.,
-                recorded ground truth or when traffic sim is skipped).
-
-        Returns:
-            Tuple of (ego_pose, traffic_poses) after ground intersection
-        """
+        """Calculate ground intersection for ego and traffic vehicles."""
 
         if self.skip or skip:
-            # Return the future poses unchanged
             return pose_future, traffic_poses
 
         assert traffic_poses is not None or (
@@ -71,23 +54,25 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
             scene_id,
             delta_start_us,
             delta_end_us,
-            pose_now.as_grpc_pose(),
-            pose_future.as_grpc_pose(),
-            [p.as_grpc_pose() for p in traffic_poses.values()],
+            pose_now,
+            pose_future,
+            list(traffic_poses.values()),
             ego_aabb=ego_aabb,
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(physics_request=request))
-
-        response = await profiled_rpc_call(
-            "ground_intersection", "physics", self.stub.ground_intersection, request
+        await self.session_info.broadcaster.broadcast(
+            LogEntry(physics_request=physics_request_to_proto(request))
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(physics_return=response))
+        response = await self.endpoints.ground_intersection.request(request)
 
-        ego_response = QVec.from_grpc_pose(response.ego_pose.pose)
+        await self.session_info.broadcaster.broadcast(
+            LogEntry(physics_return=physics_response_to_proto(response))
+        )
+
+        ego_response = QVec.from_dds_pose(response.ego_pose.pose)
         traffic_responses = {
-            k: QVec.from_grpc_pose(v.pose)
+            k: QVec.from_dds_pose(v.pose)
             for k, v in zip(traffic_poses.keys(), response.other_poses)
         }
 
@@ -98,43 +83,52 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
         scene_id: str,
         delta_start_us: int,
         delta_end_us: int,
-        ego_pose_now: Pose,
-        ego_pose_future: Pose,
-        other_poses: List[Pose],
+        pose_now: QVec,
+        pose_future: QVec,
+        other_poses: List[QVec],
         ego_aabb: AABB,
     ) -> PhysicsGroundIntersectionRequest:
-        """Prepare the physics ground intersection request."""
         return PhysicsGroundIntersectionRequest(
             scene_id=scene_id,
             now_us=delta_start_us,
             future_us=delta_end_us,
-            ego_data=PhysicsGroundIntersectionRequest.EgoData(
-                aabb=ego_aabb.to_grpc(),
-                pose_pair=PhysicsGroundIntersectionRequest.PosePair(
-                    now_pose=ego_pose_now, future_pose=ego_pose_future
+            ego_data=EgoData(
+                aabb=ego_aabb.to_dds(),
+                pose_pair=PosePair(
+                    now_pose=pose_now.as_dds_pose(),
+                    future_pose=pose_future.as_dds_pose(),
                 ),
             ),
             other_objects=[
-                PhysicsGroundIntersectionRequest.OtherObject(
-                    # TODO[RDL] extract AABB from NRE reconstruction, this
-                    # is placeholder assuming all cars are equally sized
-                    aabb=ego_aabb.to_grpc(),
-                    pose_pair=PhysicsGroundIntersectionRequest.PosePair(
-                        now_pose=other_pose, future_pose=other_pose
+                OtherObject(
+                    # TODO[RDL] extract AABB from NRE reconstruction
+                    aabb=ego_aabb.to_dds(),
+                    pose_pair=PosePair(
+                        now_pose=p.as_dds_pose(),
+                        future_pose=p.as_dds_pose(),
                     ),
                 )
-                for other_pose in other_poses
+                for p in other_poses
             ],
         )
+
+    async def get_available_scenes(self) -> List[str]:
+        if self.skip:
+            return [WILDCARD_SCENE_ID]
+
+        if self._available_scenes is None:
+            response = await self.endpoints.available_scenes.request(
+                AvailableScenesRequest()
+            )
+            self._available_scenes = list(response.scene_ids)
+
+        return self._available_scenes
 
     async def find_scenario_incompatibilities(
         self, scenario: ScenarioConfig
     ) -> List[str]:
-        """Check if physics service can handle the given scenario."""
-
         incompatibilities = await super().find_scenario_incompatibilities(scenario)
 
-        # If physics is in skip mode, it can handle any scenario
         if not self.skip and scenario.physics_update_mode == PhysicsUpdateMode.NONE:
             incompatibilities.append("Physics is disabled for this scenario.")
 

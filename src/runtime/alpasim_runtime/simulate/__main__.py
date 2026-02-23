@@ -144,9 +144,14 @@ async def shutdown_services(config: SimulatorConfig) -> None:
 
     logger.info("Shutting down services...")
 
+    from alpasim_runtime.validation import DDS_SERVICES
+
     service_endpoints = get_service_endpoints(config.network)
 
-    for stub_class, addresses in service_endpoints.values():
+    # Shut down gRPC services
+    for svc_name, (stub_class, addresses) in service_endpoints.items():
+        if svc_name in DDS_SERVICES:
+            continue
         for address in addresses:
             try:
                 channel = grpc.aio.insecure_channel(address)
@@ -156,6 +161,23 @@ async def shutdown_services(config: SimulatorConfig) -> None:
             except Exception as e:
                 # Service may already be shut down or unreachable - that's OK
                 logger.debug("Failed to shut down %s: %s", address, e)
+
+    # Shut down DDS services
+    from alpasim_dds.participant import get_participant
+    from alpasim_dds.transport import DDSTransport
+    from alpasim_dds.types.common import ShutDownRequest
+
+    participant = get_participant()
+    for svc_name in DDS_SERVICES:
+        try:
+            transport = DDSTransport(
+                participant, f"{svc_name}/shutdown",
+                ShutDownRequest,
+            )
+            transport.send(ShutDownRequest())
+            logger.debug("Sent DDS shutdown to %s", svc_name)
+        except Exception as e:
+            logger.debug("Failed to shut down %s via DDS: %s", svc_name, e)
 
     logger.info("Service shutdown complete")
 

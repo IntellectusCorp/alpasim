@@ -2,142 +2,120 @@
 # Copyright (c) 2025 NVIDIA Corporation
 
 import argparse
+import asyncio
 import functools
 import logging
-from concurrent import futures
 
-from alpasim_grpc.v0.common_pb2 import AvailableScenesReturn, Empty, VersionId
-from alpasim_grpc.v0.physics_pb2 import (
-    PhysicsGroundIntersectionRequest,
-    PhysicsGroundIntersectionReturn,
-)
-from alpasim_grpc.v0.physics_pb2_grpc import (
-    PhysicsServiceServicer,
-    add_PhysicsServiceServicer_to_server,
-)
+from alpasim_dds.endpoints.physics_server import PhysicsServerEndpoints
+from alpasim_dds.participant import get_participant
+from alpasim_dds.types.common import AvailableScenesResponse, VersionResponse
+from alpasim_dds.types.physics import PhysicsGroundIntersectionRequest, PhysicsGroundIntersectionReturn
 from alpasim_physics import VERSION_MESSAGE
 from alpasim_physics.backend import PhysicsBackend
-from alpasim_physics.utils import (
-    aabb_to_ndarray,
-    pose_grpc_to_ndarray,
-    pose_status_to_grpc,
-)
+from alpasim_physics.utils import aabb_dds_to_ndarray, pose_dds_to_ndarray, pose_status_to_dds
 from alpasim_utils.artifact import Artifact
-
-import grpc
 
 logger = logging.getLogger(__name__)
 
 
-class PhysicsSimService(PhysicsServiceServicer):
+class PhysicsSimService:
     def __init__(
         self,
-        server: grpc.Server,
+        endpoints: PhysicsServerEndpoints,
         artifact_glob: str,
         cache_size: int = 2,
         use_ground_mesh: bool = False,
         visualize: bool = False,
     ) -> None:
-        self.server = server
+        self.endpoints = endpoints
         self.artifacts = Artifact.discover_from_glob(
             artifact_glob, use_ground_mesh=use_ground_mesh
         )
-
         self.visualize = visualize
+        self._stop = asyncio.Event()
+
         logger.info(f"Available scenes: {list(self.artifacts.keys())}.")
 
-        # instantiate the method here to avoid caching `self`
         @functools.lru_cache(maxsize=cache_size)
         def get_backend(scene_id: str) -> PhysicsBackend:
             if scene_id not in self.artifacts:
                 raise KeyError(f"Scene {scene_id=} not available.")
-
             artifact = self.artifacts[scene_id]
             logger.info(f"Cache miss, loading {artifact.scene_id=}")
             mesh_ply = artifact.mesh_ply
-
-            # don't keep the .ply file once the backend is evicted from the lru_cache
             artifact.clear_cache()
-
-            return PhysicsBackend(
-                mesh_ply,
-                visualize=self.visualize,
-            )
+            return PhysicsBackend(mesh_ply, visualize=self.visualize)
 
         self.get_backend = get_backend
 
     def ground_intersection(
-        self, request: PhysicsGroundIntersectionRequest, context: grpc.ServicerContext
+        self, request: PhysicsGroundIntersectionRequest
     ) -> PhysicsGroundIntersectionReturn:
         logger.debug(f"Received request for scene_id={request.scene_id}")
-        logger.debug(f"full request={request}")
-        try:
-            backend = self.get_backend(request.scene_id)
+        backend = self.get_backend(request.scene_id)
 
-            other_updates = []
-            for other in request.other_objects:
-                other_updates.append(
-                    backend.update_pose(
-                        pose_grpc_to_ndarray(other.pose_pair.future_pose),
-                        aabb_to_ndarray(other.aabb),
-                        request.future_us,
-                    )
+        other_updates = []
+        for other in request.other_objects:
+            other_updates.append(
+                backend.update_pose(
+                    pose_dds_to_ndarray(other.pose_pair.future_pose),
+                    aabb_dds_to_ndarray(other.aabb),
+                    request.future_us,
                 )
+            )
 
-            if request.HasField("ego_data"):
-                # if ego data is provided
-                predicted_pose = pose_grpc_to_ndarray(
-                    request.ego_data.pose_pair.future_pose
-                )
-                ego_aabb = aabb_to_ndarray(request.ego_data.aabb)
+        if request.ego_data is not None:
+            predicted_pose = pose_dds_to_ndarray(
+                request.ego_data.pose_pair.future_pose
+            )
+            ego_aabb = aabb_dds_to_ndarray(request.ego_data.aabb)
 
-                updated_ego_pose, updated_ego_status = backend.update_pose(
-                    predicted_pose, ego_aabb, request.future_us
-                )
+            updated_ego_pose, updated_ego_status = backend.update_pose(
+                predicted_pose, ego_aabb, request.future_us
+            )
 
-                response = PhysicsGroundIntersectionReturn(
-                    ego_pose=pose_status_to_grpc(updated_ego_pose, updated_ego_status),
-                    other_poses=[
-                        pose_status_to_grpc(pose, status)
-                        for pose, status in other_updates
-                    ],
-                )
-            else:
-                response = PhysicsGroundIntersectionReturn(
-                    other_poses=[
-                        pose_status_to_grpc(pose, status)
-                        for pose, status in other_updates
-                    ],
-                )
-            logger.debug("sending response")
-            return response
-        except Exception as e:
-            context.set_code(grpc.StatusCode.UNKNOWN)
-            context.set_details(str(e))
-            raise
+            return PhysicsGroundIntersectionReturn(
+                ego_pose=pose_status_to_dds(updated_ego_pose, updated_ego_status),
+                other_poses=[
+                    pose_status_to_dds(pose, status) for pose, status in other_updates
+                ],
+            )
+        else:
+            return PhysicsGroundIntersectionReturn(
+                other_poses=[
+                    pose_status_to_dds(pose, status) for pose, status in other_updates
+                ],
+            )
 
-    def get_version(self, request: Empty, context: grpc.ServicerContext) -> VersionId:
-        logger.info("get_version")
-        try:
-            return VERSION_MESSAGE
-        except Exception as e:
-            context.set_code(grpc.StatusCode.UNKNOWN)
-            context.set_details(str(e))
-            raise
-
-    def get_available_scenes(
-        self, request: Empty, context: grpc.ServicerContext
-    ) -> AvailableScenesReturn:
+    def get_available_scenes(self, request) -> AvailableScenesResponse:
         logger.info("get_available_scenes")
-        return AvailableScenesReturn(scene_ids=list(self.artifacts.keys()))
+        return AvailableScenesResponse(
+            scene_ids=list(self.artifacts.keys()),
+        )
 
-    def shut_down(self, request: Empty, context: grpc.ServicerContext) -> Empty:
+    def get_version(self, request) -> VersionResponse:
+        logger.info("get_version")
+        return VersionResponse(
+            version_id=VERSION_MESSAGE.version_id,
+            git_hash=VERSION_MESSAGE.git_hash,
+        )
+
+    def shut_down(self, request) -> None:
         logger.info("shut_down")
-        context.add_callback(self._shut_down)
-        return Empty()
+        self._stop.set()
 
-    def _shut_down(self) -> None:
-        self.server.stop(0)
+    async def run(self):
+        """모든 endpoint의 serve 루프를 동시에 실행."""
+        await asyncio.gather(
+            self.endpoints.ground_intersection.serve(
+                self.ground_intersection, self._stop
+            ),
+            self.endpoints.available_scenes.serve(
+                self.get_available_scenes, self._stop
+            ),
+            self.endpoints.version.serve(self.get_version, self._stop),
+            self.endpoints.shutdown.serve(self.shut_down, self._stop),
+        )
 
 
 def parse_args(
@@ -150,21 +128,25 @@ def parse_args(
         help="Glob expression to find artifacts. Must end in .usdz to find relevant files.",
         required=True,
     )
-    parser.add_argument("--host", type=str, default="localhost")
-    parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--use-ground-mesh", type=bool, default=False)
     parser.add_argument("--visualize", type=bool, default=False)
     parser.add_argument(
         "--cache-size",
         type=int,
         default=16,
-        help="Number of scene backends to keep in LRU cache. Set to match or exceed concurrent scenes.",
+        help="Number of scene backends to keep in LRU cache.",
     )
     parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING, ERROR)",
+    )
+    parser.add_argument(
+        "--domain-id",
+        type=int,
+        default=0,
+        help="DDS domain ID",
     )
     args, overrides = parser.parse_known_args(arg_list)
     return args, overrides
@@ -179,24 +161,19 @@ def main(arg_list: list[str] | None = None) -> None:
         datefmt="%H:%M:%S",
     )
 
-    logger.info(f"Identifying as\n{VERSION_MESSAGE}")
-
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
-    address = f"{args.host}:{args.port}"
-    server.add_insecure_port(address)
+    participant = get_participant(args.domain_id)
+    endpoints = PhysicsServerEndpoints(participant)
 
     service = PhysicsSimService(
-        server,
+        endpoints,
         args.artifact_glob,
         cache_size=args.cache_size,
         use_ground_mesh=args.use_ground_mesh,
         visualize=args.visualize,
     )
-    add_PhysicsServiceServicer_to_server(service, server)
 
-    logger.info(f"Serving on {address}")
-    server.start()
-    server.wait_for_termination()
+    logger.info("Physics DDS service starting...")
+    asyncio.run(service.run())
 
 
 if __name__ == "__main__":

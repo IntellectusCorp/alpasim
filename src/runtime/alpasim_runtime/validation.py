@@ -20,14 +20,17 @@ import grpc
 
 logger = logging.getLogger(__name__)
 
+# Services that have been migrated to DDS (no gRPC server)
+DDS_SERVICES = {"driver", "controller", "physics"}
 
-async def _probe_version(
+
+async def _probe_version_grpc(
     svc_name: str,
     stub_class: type,
     address: str,
     timeout_s: int,
 ) -> None:
-    """Probe a single service for version info."""
+    """Probe a single gRPC service for version info."""
     logger.info("Connecting to %s at %s...", svc_name, address)
     channel = grpc.aio.insecure_channel(address)
     try:
@@ -47,6 +50,25 @@ async def _probe_version(
         await channel.close()
 
 
+async def _probe_version_dds(
+    svc_name: str,
+    timeout_s: int,
+) -> None:
+    """Probe a single DDS service for version info."""
+    from alpasim_dds.participant import get_participant
+    from alpasim_dds.transport import DDSTransport
+    from alpasim_dds.types.common import VersionRequest, VersionResponse
+
+    logger.info("Connecting to %s via DDS...", svc_name)
+    participant = get_participant()
+    transport = DDSTransport(
+        participant, f"{svc_name}/version",
+        VersionRequest, VersionResponse,
+    )
+    version = await transport.request(VersionRequest(), timeout_s=timeout_s)
+    logger.info("Connected to %s: %s (git: %s)", svc_name, version.version_id, version.git_hash)
+
+
 async def gather_versions_from_addresses(
     network_config: NetworkSimulatorConfig,
     timeout_s: int = 30,
@@ -61,7 +83,10 @@ async def gather_versions_from_addresses(
     for svc_name, (stub_class, addresses) in endpoint_stubs.items():
         if not addresses:
             continue
-        tasks.append(_probe_version(svc_name, stub_class, addresses[0], timeout_s))
+        if svc_name in DDS_SERVICES:
+            tasks.append(_probe_version_dds(svc_name, timeout_s))
+        else:
+            tasks.append(_probe_version_grpc(svc_name, stub_class, addresses[0], timeout_s))
 
     await asyncio.gather(*tasks)
 
@@ -74,8 +99,12 @@ async def validate_scenarios(config: SimulatorConfig) -> None:
     This ensures we fail fast in the parent if any scenario is invalid.
     """
     # driver and controller return wildcard (work with any scene), no need to probe
+    grpc_services = ["sensorsim", "trafficsim"]
+    dds_services = ["physics"]
+
+    # gRPC service probes
     service_endpoints = get_service_endpoints(
-        config.network, services=["sensorsim", "physics", "trafficsim"]
+        config.network, services=grpc_services
     )
 
     tasks = []
@@ -83,13 +112,23 @@ async def validate_scenarios(config: SimulatorConfig) -> None:
         if not addresses:
             continue
         tasks.append(
-            _probe_scenario_compatibility(
+            _probe_scenario_compatibility_grpc(
                 svc_name,
                 stub_class,
                 addresses[0],
                 config.user.scenarios,
                 timeout_s=config.user.endpoints.startup_timeout_s,
                 use_metadata=(svc_name == "trafficsim"),
+            )
+        )
+
+    # DDS service probes
+    for svc_name in dds_services:
+        tasks.append(
+            _probe_scenario_compatibility_dds(
+                svc_name,
+                config.user.scenarios,
+                timeout_s=config.user.endpoints.startup_timeout_s,
             )
         )
 
@@ -100,7 +139,7 @@ async def validate_scenarios(config: SimulatorConfig) -> None:
         raise AssertionError("\n".join(error_messages))
 
 
-async def _probe_scenario_compatibility(
+async def _probe_scenario_compatibility_grpc(
     svc_name: str,
     stub_class: type,
     address: str,
@@ -108,13 +147,7 @@ async def _probe_scenario_compatibility(
     timeout_s: int = 30,
     use_metadata: bool = False,
 ) -> list[str]:
-    """Probe a service address to validate scenario compatibility without creating pools.
-
-    Args:
-        svc_name: Name of the service being probed (for logging).
-        use_metadata: If True, use get_metadata().supported_map_ids instead of
-            get_available_scenes().scene_ids (for trafficsim compatibility).
-    """
+    """Probe a gRPC service to validate scenario compatibility."""
     incompatibilities = []
 
     logger.info("Validating scenarios on %s at %s...", svc_name, address)
@@ -156,6 +189,49 @@ async def _probe_scenario_compatibility(
             logger.info("Scenario validation passed on %s", svc_name)
     finally:
         await channel.close()
+
+    return incompatibilities
+
+
+async def _probe_scenario_compatibility_dds(
+    svc_name: str,
+    scenarios: list[ScenarioConfig],
+    timeout_s: int = 30,
+) -> list[str]:
+    """Probe a DDS service to validate scenario compatibility."""
+    from alpasim_dds.participant import get_participant
+    from alpasim_dds.transport import DDSTransport
+    from alpasim_dds.types.common import AvailableScenesRequest, AvailableScenesResponse
+
+    incompatibilities = []
+
+    logger.info("Validating scenarios on %s via DDS...", svc_name)
+    participant = get_participant()
+    transport = DDSTransport(
+        participant, f"{svc_name}/available_scenes",
+        AvailableScenesRequest, AvailableScenesResponse,
+    )
+    response = await transport.request(AvailableScenesRequest(), timeout_s=timeout_s)
+    available_scenes = set(response.scene_ids or [])
+
+    for scenario in scenarios:
+        if (
+            scenario.scene_id not in available_scenes
+            and "*" not in available_scenes
+        ):
+            incompatibilities.append(
+                f"Scene {scenario.scene_id} not available on {svc_name} (DDS). "
+                f"Available: {sorted(available_scenes)}"
+            )
+
+    if incompatibilities:
+        logger.error(
+            "Scenario validation failed on %s: %d issue(s)",
+            svc_name,
+            len(incompatibilities),
+        )
+    else:
+        logger.info("Scenario validation passed on %s", svc_name)
 
     return incompatibilities
 

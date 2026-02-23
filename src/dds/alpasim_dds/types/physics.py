@@ -41,8 +41,7 @@ class PhysicsGroundIntersectionRequest(IdlStruct):
 
 
 class GroundIntersectionStatus(IdlEnum):
-    SUCCESSFUL_UPDATE = 0
-    UNKNOWN = 1
+    SUCCESSFUL_UPDATE = 1
     INSUFFICIENT_POINTS_FITPLANE = 2
     HIGH_TRANSLATION = 3
     HIGH_ROTATION = 4

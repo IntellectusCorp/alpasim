@@ -22,22 +22,21 @@ import hydra
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from alpasim_grpc import API_VERSION_MESSAGE
-from alpasim_grpc.v0 import sensorsim_pb2
-from alpasim_grpc.v0.common_pb2 import (
+from alpasim_dds.endpoints.driver_server import DriverServerEndpoints
+from alpasim_dds.participant import get_participant
+from alpasim_dds.types.camera import AvailableCamera
+from alpasim_dds.types.common import (
     DynamicState,
-    Empty,
     Pose,
     PoseAtTime,
     Quat,
-    SessionRequestStatus,
     Trajectory,
     Vec3,
-    VersionId,
 )
-from alpasim_grpc.v0.egodriver_pb2 import (
+from alpasim_dds.types.egodriver import (
     DriveRequest,
     DriveResponse,
+    DriveResponseDebugInfo,
     DriveSessionCloseRequest,
     DriveSessionRequest,
     GroundTruthRequest,
@@ -46,15 +45,9 @@ from alpasim_grpc.v0.egodriver_pb2 import (
     Route,
     RouteRequest,
 )
-from alpasim_grpc.v0.egodriver_pb2_grpc import (
-    EgodriverServiceServicer,
-    add_EgodriverServiceServicer_to_server,
-)
+from alpasim_dds.types.common import SessionRequestStatus, VersionResponse
 from omegaconf import OmegaConf
 from PIL import Image
-
-import grpc
-import grpc.aio
 
 from .frame_cache import FrameCache
 from .models import DriveCommand
@@ -79,17 +72,9 @@ logger = logging.getLogger(__name__)
 
 
 def _get_external_ip() -> str:
-    """Get the external IP address of this machine.
-
-    Uses a UDP socket to determine which local interface would be used
-    to reach an external address (without actually sending any data).
-
-    Returns:
-        The external IP address as a string, or "unknown" if detection fails.
-    """
+    """Get the external IP address of this machine."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            # Connect to an external address (doesn't send data, just determines route)
             s.connect(("8.8.8.8", 80))
             return s.getsockname()[0]
     except Exception:
@@ -98,7 +83,6 @@ def _get_external_ip() -> str:
 
 def _quat_to_yaw(quaternion: Quat) -> float:
     """Extract the yaw component (rotation about +Z) from a quaternion."""
-
     return np.arctan2(
         2.0 * (quaternion.w * quaternion.z + quaternion.x * quaternion.y),
         1.0 - 2.0 * (quaternion.y * quaternion.y + quaternion.z * quaternion.z),
@@ -107,7 +91,6 @@ def _quat_to_yaw(quaternion: Quat) -> float:
 
 def _yaw_to_quat(yaw: float) -> Quat:
     """Create a Z-only rotation quaternion from the provided yaw angle."""
-
     half_yaw = 0.5 * yaw
     return Quat(w=float(np.cos(half_yaw)), x=0.0, y=0.0, z=float(np.sin(half_yaw)))
 
@@ -116,7 +99,6 @@ def _rig_est_offsets_to_local_positions(
     current_pose_in_local: PoseAtTime, offsets_in_rig: np.ndarray
 ) -> np.ndarray:
     """Project rig-est displacements onto the local-frame pose anchored by `current_pose`."""
-
     curr_x = current_pose_in_local.pose.vec.x
     curr_y = current_pose_in_local.pose.vec.y
 
@@ -161,14 +143,14 @@ class Session:
     frame_caches: dict[str, FrameCache]
     available_cameras_logical_ids: set[str]
     desired_cameras_logical_ids: set[str]
-    camera_specs: dict[str, sensorsim_pb2.AvailableCamerasReturn.AvailableCamera]
+    camera_specs: dict[str, AvailableCamera]
     rectification_cfg: Optional[dict[str, RectificationTargetConfig]] = None
     rectifiers: dict[str, Optional[FthetaToPinholeRectifier]] = field(
         default_factory=dict
     )
     poses: list[PoseAtTime] = field(default_factory=list)
     dynamic_states: list[tuple[int, DynamicState]] = field(default_factory=list)
-    current_command: DriveCommand = DriveCommand.STRAIGHT  # Default to straight
+    current_command: DriveCommand = DriveCommand.STRAIGHT
 
     @staticmethod
     def create(
@@ -177,24 +159,10 @@ class Session:
         context_length: int,
         subsample_factor: int = 1,
     ) -> Session:
-        """Create a new driver session.
-
-        Args:
-            request: The gRPC session request with vehicle/camera definitions.
-            cfg: Driver configuration.
-            context_length: Number of temporal frames needed.
-            subsample_factor: Subsampling factor for frames.
-
-        Returns:
-            A new Session instance.
-
-        Note:
-            Camera count validation is now handled by the model's __init__
-            which raises ValueError if the camera count doesn't match.
-        """
+        """Create a new driver session."""
         debug_scene_id = (
             request.debug_info.scene_id
-            if request.debug_info is not None
+            if request.debug_info is not None and request.debug_info.scene_id
             else request.session_uuid
         )
 
@@ -203,9 +171,7 @@ class Session:
         if vehicle is None:
             raise ValueError("Vehicle definition is required in DriveSessionRequest")
 
-        camera_specs: dict[
-            str, sensorsim_pb2.AvailableCamerasReturn.AvailableCamera
-        ] = {}
+        camera_specs: dict[str, AvailableCamera] = {}
         for camera_def in vehicle.available_cameras:
             if not camera_def.logical_id:
                 raise ValueError(
@@ -240,7 +206,6 @@ class Session:
             logical_id: None for logical_id in desired_cameras_logical_ids
         }
 
-        # Create a FrameCache for each desired camera
         frame_caches: dict[str, FrameCache] = {}
         for camera_id in cfg.inference.use_cameras:
             frame_caches[camera_id] = FrameCache(
@@ -287,16 +252,12 @@ class Session:
         self, logical_id: str, source_resolution_hw: tuple[int, int]
     ) -> Optional[FthetaToPinholeRectifier]:
         """Instantiate and cache a rectifier once the true source resolution is known."""
-
-        # Check if there's a rectifier for target camera in the config
         if self.rectification_cfg is None or logical_id not in self.rectification_cfg:
             return None
 
-        # Check if we already have a rectifier for this camera
         if self.rectifiers.get(logical_id) is not None:
             return self.rectifiers[logical_id]
 
-        # Build the rectifier
         rectifier = build_ftheta_rectifier_for_resolution(
             camera_proto=self.camera_specs[logical_id],
             target_cfg=self.rectification_cfg[logical_id],
@@ -313,33 +274,21 @@ class Session:
     def rectify_image(self, logical_id: str, image: Image.Image) -> Image.Image:
         """Apply rectification for logical_id if configured."""
         source_resolution_hw = (image.height, image.width)
-
-        # Need to do this lazily as we won't know the source resolution until
-        # after the first image is received.
-        # (The available cameras define the native camera resolutio, not the
-        # rendering resolution.)
         rectifier = self._maybe_build_rectifier(logical_id, source_resolution_hw)
-
         if rectifier is None:
             return image
         return Image.fromarray(rectifier.rectify(np.array(image)))
 
-    def add_egoposes(self, egoposes: Trajectory) -> None:
+    def add_egoposes(self, traj: Trajectory) -> None:
         """Add rig-est pose observations in the local frame."""
-        self.poses.extend(egoposes.poses)
+        self.poses.extend(traj.poses)
         self.poses = sorted(self.poses, key=lambda pose: pose.timestamp_us)
         logger.debug(f"poses: {self.poses}")
 
     def add_dynamic_state(
         self, timestamp_us: int, dynamic_state: Optional[DynamicState]
     ) -> None:
-        """Add a dynamic state observation at the given timestamp.
-
-        Args:
-            timestamp_us: Timestamp in microseconds for this observation.
-            dynamic_state: The dynamic state (velocities, accelerations) in rig frame.
-                May be None if not provided by the client.
-        """
+        """Add a dynamic state observation at the given timestamp."""
         if dynamic_state is None:
             raise ValueError("Dynamic state is required")
         self.dynamic_states.append((timestamp_us, dynamic_state))
@@ -358,20 +307,7 @@ class Session:
         command_distance_threshold: Optional[float] = None,
         min_lookahead_distance: Optional[float] = None,
     ) -> None:
-        """Derive command from waypoints using route geometry.
-
-        Note: this is called for RouteRequest and assumed to be in the
-        true rig frame.
-
-        Args:
-            route: Route containing waypoints in the rig frame.
-            use_waypoint_commands: Whether to derive commands from waypoints.
-            command_distance_threshold: Lateral distance threshold (meters) for
-                determining turn commands. Waypoints beyond this threshold trigger
-                LEFT/RIGHT commands.
-            min_lookahead_distance: Minimum forward distance (meters) to consider
-                a waypoint as the target for command derivation.
-        """
+        """Derive command from waypoints using route geometry."""
         if not use_waypoint_commands or len(route.waypoints) < 1:
             return
 
@@ -384,7 +320,6 @@ class Session:
                 "when use_waypoint_commands is True"
             )
 
-        # Use the navigation module to determine command
         self.current_command = determine_command_from_route(
             route=route,
             command_distance_threshold=command_distance_threshold,
@@ -398,14 +333,14 @@ class Session:
 
 
 def async_log_call(func: Callable) -> Callable:
-    """Helper to add logging for gRPC calls (sync or async)."""
+    """Helper to add logging for calls (sync or async)."""
 
     @functools.wraps(func)
     async def async_wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
             logger.debug("Calling %s", func.__name__)
             return await func(*args, **kwargs)
-        except Exception:  # pragma: no cover - logging assistance
+        except Exception:
             logger.exception("Exception in %s", func.__name__)
             raise
 
@@ -419,23 +354,8 @@ def _create_model(
     context_length: int | None,
     output_frequency_hz: int,
 ) -> BaseTrajectoryModel:
-    """Factory method to create the appropriate model.
-
-    Args:
-        cfg: Model configuration.
-        device: Torch device to load model on.
-        camera_ids: List of camera logical IDs in order.
-        context_length: Number of temporal frames (None uses model default).
-        output_frequency_hz: Trajectory output frequency in Hz.
-
-    Returns:
-        Model instance implementing BaseTrajectoryModel.
-
-    Raises:
-        ValueError: If model type is unknown or required config is missing.
-    """
+    """Factory method to create the appropriate model."""
     if cfg.model_type == ModelType.VAM:
-
         if cfg.tokenizer_path is None:
             raise ValueError("VAM model requires tokenizer_path")
         return VAMModel(
@@ -446,7 +366,6 @@ def _create_model(
             context_length=context_length or 8,
         )
     elif cfg.model_type == ModelType.TRANSFUSER:
-
         return TransfuserModel(
             checkpoint_path=cfg.checkpoint_path,
             device=device,
@@ -469,38 +388,24 @@ def _create_model(
         raise ValueError(f"Unknown model type: {cfg.model_type}")
 
 
-class EgoDriverService(EgodriverServiceServicer):
-    """Unified policy service supporting multiple model backends."""
+class EgoDriverService:
+    """Unified policy service supporting multiple model backends (DDS)."""
 
     def __init__(
         self,
         cfg: DriverConfig,
         loop: asyncio.AbstractEventLoop,
-        grpc_server: grpc.aio.Server,
+        endpoints: DriverServerEndpoints,
     ) -> None:
-        """Initialize the Ego Driver service.
-
-        Sets up the model backend, and starts a background
-        worker thread for batched inference processing.
-
-        Args:
-            cfg: Hydra configuration containing model paths and inference settings
-            loop: Asyncio event loop for coordinating async operations and scheduling
-                futures from the worker thread back to the async gRPC handlers
-            grpc_server: gRPC server instance for service registration
-        """
-
-        # Private members
         self._cfg = cfg
         self._loop = loop
-        self._grpc_server = grpc_server
+        self._endpoints = endpoints
+        self._stop = asyncio.Event()
 
-        # Determine device
         self._device = torch.device(
             cfg.model.device if torch.cuda.is_available() else "cpu"
         )
 
-        # Create model using factory
         self._model = _create_model(
             cfg.model,
             self._device,
@@ -509,7 +414,6 @@ class EgoDriverService(EgodriverServiceServicer):
             output_frequency_hz=cfg.inference.output_frequency_hz,
         )
 
-        # Get context length from model or config override
         self._context_length = (
             cfg.inference.context_length
             if cfg.inference.context_length is not None
@@ -533,7 +437,6 @@ class EgoDriverService(EgodriverServiceServicer):
         )
         self._sessions: dict[str, Session] = {}
 
-        # Initialize trajectory optimizer if enabled
         self._trajectory_optimizer: Optional[TrajectoryOptimizer] = None
         self._vehicle_constraints: Optional[VehicleConstraints] = None
         if cfg.trajectory_optimizer.enabled:
@@ -584,19 +487,16 @@ class EgoDriverService(EgodriverServiceServicer):
             if self._worker_stop.is_set():
                 break
 
-            # Get at least one job
             try:
                 job = self._job_queue.get()
             except queue.Empty:
                 continue
 
-            # Check if we should stop
             if job is _SENTINEL_JOB:
                 break
 
             batch: list[DriveJob] = [job]
 
-            # Get as many jobs as we can
             stop_after_batch = False
             while len(batch) < self._max_batch_size:
                 try:
@@ -636,7 +536,6 @@ class EgoDriverService(EgodriverServiceServicer):
             if stop_after_batch:
                 break
 
-        # Signal the worker thread to stop
         self._worker_stop.set()
         while True:
             try:
@@ -648,20 +547,7 @@ class EgoDriverService(EgodriverServiceServicer):
             self._loop.call_soon_threadsafe(leftover.result.cancel)
 
     def _get_speed_and_acceleration(self, session: Session) -> tuple[float, float]:
-        """Extract speed and acceleration from session's dynamic state.
-
-        Falls back to finite differences from ego positions if dynamic state
-        reports zero speed and acceleration.
-
-        Args:
-            session: Session containing dynamic state history.
-
-        Returns:
-            Tuple of (speed_m_s, acceleration_m_s2).
-
-        Raises:
-            ValueError: If no dynamic states are available.
-        """
+        """Extract speed and acceleration from session's dynamic state."""
         if not session.dynamic_states:
             raise ValueError(
                 "No dynamic states available in session. "
@@ -677,11 +563,7 @@ class EgoDriverService(EgodriverServiceServicer):
     def _prepare_camera_images(
         self, session: Session
     ) -> dict[str, list[tuple[int, np.ndarray]]]:
-        """Collect raw images from frame caches for all cameras.
-
-        Returns dict mapping camera_id to list of (timestamp_us, image) tuples.
-        List length equals context_length.
-        """
+        """Collect raw images from frame caches for all cameras."""
         camera_images: dict[str, list[tuple[int, np.ndarray]]] = {}
 
         for cam_id in self._model.camera_ids:
@@ -699,9 +581,7 @@ class EgoDriverService(EgodriverServiceServicer):
         logical_id: str,
         timestamp_us: int,
     ) -> None:
-        """Save pre- and post-rectification images side by side for
-        debugging."""
-
+        """Save pre- and post-rectification images side by side for debugging."""
         if not self._cfg.plot_debug_images:
             return
 
@@ -726,7 +606,7 @@ class EgoDriverService(EgodriverServiceServicer):
         )
         axes[1].axis("off")
 
-        fig.suptitle(f"{logical_id} @ {timestamp_us} µs")
+        fig.suptitle(f"{logical_id} @ {timestamp_us} us")
         fig.tight_layout()
 
         filename = f"{timestamp_us}_{logical_id}_rectification.png"
@@ -735,16 +615,11 @@ class EgoDriverService(EgodriverServiceServicer):
         plt.close(fig)
 
     def _run_batch(self, batch: list[DriveJob]) -> list[ModelPrediction]:
-        """Run inference for a batch of jobs using the model abstraction.
-
-        Each model handles its own preprocessing, tokenization (if applicable),
-        and inference internally.
-        """
+        """Run inference for a batch of jobs using the model abstraction."""
         responses: list[ModelPrediction] = []
 
         for job in batch:
             camera_images = self._prepare_camera_images(job.session)
-
             speed, acceleration = self._get_speed_and_acceleration(job.session)
 
             prediction = self._model.predict(
@@ -754,20 +629,13 @@ class EgoDriverService(EgodriverServiceServicer):
                 acceleration=acceleration,
                 ego_pose_at_time_history_local=job.session.poses,
             )
-
             responses.append(prediction)
 
         return responses
 
-    @async_log_call
-    async def start_session(
-        self, request: DriveSessionRequest, context: grpc.aio.ServicerContext
-    ) -> SessionRequestStatus:
+    def start_session(self, request: DriveSessionRequest) -> SessionRequestStatus:
         if request.session_uuid in self._sessions:
-            context.abort(
-                grpc.StatusCode.ALREADY_EXISTS,
-                f"Session {request.session_uuid} already exists.",
-            )
+            logger.error(f"Session {request.session_uuid} already exists.")
             return SessionRequestStatus()
 
         logger.info(
@@ -782,68 +650,46 @@ class EgoDriverService(EgodriverServiceServicer):
             subsample_factor=self._cfg.inference.subsample_factor,
         )
         self._sessions[request.session_uuid] = session
-
         return SessionRequestStatus()
 
-    @async_log_call
-    async def close_session(
-        self, request: DriveSessionCloseRequest, context: grpc.aio.ServicerContext
-    ) -> Empty:
+    def close_session(self, request: DriveSessionCloseRequest) -> None:
         if request.session_uuid not in self._sessions:
             raise KeyError(f"Session {request.session_uuid} does not exist.")
-
         logger.info(f"Closing session {request.session_uuid}")
         del self._sessions[request.session_uuid]
-        return Empty()
 
-    @async_log_call
-    async def get_version(
-        self, request: Empty, context: grpc.aio.ServicerContext
-    ) -> VersionId:
+    def get_version(self, request) -> VersionResponse:
         driver_version = version("alpasim_driver")
         model_type = self._cfg.model.model_type.value
-        return VersionId(
+        return VersionResponse(
             version_id=f"{model_type}-driver-{driver_version}",
             git_hash="unknown",
-            grpc_api_version=API_VERSION_MESSAGE,
         )
 
-    @async_log_call
-    async def submit_image_observation(
-        self, request: RolloutCameraImage, context: grpc.aio.ServicerContext
-    ) -> Empty:
-        grpc_image = request.camera_image
-        image = Image.open(BytesIO(grpc_image.image_bytes))
+    def submit_image_observation(self, request: RolloutCameraImage) -> None:
+        camera_image = request.camera_image
+        image = Image.open(BytesIO(camera_image.image_bytes))
         session = self._sessions[request.session_uuid]
-        if grpc_image.logical_id not in session.desired_cameras_logical_ids:
-            raise ValueError(f"Camera {grpc_image.logical_id} not in desired cameras")
+        if camera_image.logical_id not in session.desired_cameras_logical_ids:
+            raise ValueError(f"Camera {camera_image.logical_id} not in desired cameras")
 
-        rectified_image = session.rectify_image(grpc_image.logical_id, image)
+        rectified_image = session.rectify_image(camera_image.logical_id, image)
         self._maybe_save_rectification_debug_image(
             image,
             rectified_image,
             session.debug_scene_id,
-            grpc_image.logical_id,
-            grpc_image.frame_end_us,
+            camera_image.logical_id,
+            camera_image.frame_end_us,
         )
         session.add_image(
-            grpc_image.logical_id,
+            camera_image.logical_id,
             np.array(rectified_image),
-            grpc_image.frame_end_us,
+            camera_image.frame_end_us,
         )
 
-        return Empty()
-
-    @async_log_call
-    async def submit_egomotion_observation(
-        self, request: RolloutEgoTrajectory, context: grpc.aio.ServicerContext
-    ) -> Empty:
+    def submit_egomotion_observation(self, request: RolloutEgoTrajectory) -> None:
         session = self._sessions[request.session_uuid]
 
-        # Guard: We currently assume a single pose per egomotion observation.
-        # The dynamic_state has no timestamp and is assumed to correspond to
-        # the (single) pose's timestamp. If multiple poses are sent, remove
-        # this check and ensure proper handling of multi-pose trajectories.
         if len(request.trajectory.poses) != 1:
             raise ValueError(
                 f"Expected exactly 1 pose in egomotion trajectory, got {len(request.trajectory.poses)}. "
@@ -853,20 +699,13 @@ class EgoDriverService(EgodriverServiceServicer):
 
         session.add_egoposes(request.trajectory)
 
-        # Track dynamic state if provided (velocities, accelerations in rig frame)
-        if request.HasField("dynamic_state") and request.trajectory.poses:
-            # Use the latest pose timestamp for the dynamic state
+        if request.dynamic_state is not None and request.trajectory.poses:
             latest_timestamp_us = max(
                 pose.timestamp_us for pose in request.trajectory.poses
             )
             session.add_dynamic_state(latest_timestamp_us, request.dynamic_state)
 
-        return Empty()
-
-    @async_log_call
-    async def submit_route(
-        self, request: RouteRequest, context: grpc.aio.ServicerContext
-    ) -> Empty:
+    def submit_route(self, request: RouteRequest) -> None:
         logger.debug("submit_route: waypoint count=%s", len(request.route.waypoints))
         if self._cfg.route is not None:
             self._sessions[request.session_uuid].update_command_from_route(
@@ -880,23 +719,15 @@ class EgoDriverService(EgodriverServiceServicer):
                 request.route,
                 use_waypoint_commands=False,
             )
-        return Empty()
 
-    @async_log_call
-    async def submit_recording_ground_truth(
-        self, request: GroundTruthRequest, context: grpc.aio.ServicerContext
-    ) -> Empty:
+    def submit_recording_ground_truth(self, request: GroundTruthRequest) -> None:
         logger.debug("Ground truth received but not used by driver")
-        return Empty()
 
     def _check_frames_ready(self, session: Session) -> bool:
         """Check if all cameras have enough frames for inference."""
         return session.all_cameras_ready()
 
-    @async_log_call
-    async def drive(
-        self, request: DriveRequest, context: grpc.aio.ServicerContext
-    ) -> DriveResponse:
+    async def drive(self, request: DriveRequest) -> DriveResponse:
         if request.session_uuid not in self._sessions:
             raise KeyError(f"Session {request.session_uuid} not found")
 
@@ -904,7 +735,6 @@ class EgoDriverService(EgodriverServiceServicer):
 
         if not self._check_frames_ready(session):
             empty_traj = Trajectory()
-            # Get required frame count from first cache (all have same config)
             min_required = next(
                 iter(session.frame_caches.values())
             ).min_frames_required()
@@ -917,9 +747,7 @@ class EgoDriverService(EgodriverServiceServicer):
                 self._context_length,
                 self._cfg.inference.subsample_factor,
             )
-            return DriveResponse(
-                trajectory=empty_traj,
-            )
+            return DriveResponse(trajectory=empty_traj)
 
         pose_snapshot = session.poses[-1] if session.poses else None
         logger.debug(f"pose_snapshot: {pose_snapshot}")
@@ -930,9 +758,7 @@ class EgoDriverService(EgodriverServiceServicer):
                 "(poses list length: %s). Returning empty trajectory",
                 len(session.poses),
             )
-            return DriveResponse(
-                trajectory=empty_traj,
-            )
+            return DriveResponse(trajectory=empty_traj)
 
         future: asyncio.Future[ModelPrediction] = self._loop.create_future()
         job = DriveJob(
@@ -947,7 +773,6 @@ class EgoDriverService(EgodriverServiceServicer):
 
         prediction = await future
 
-        # Convert model prediction to Alpasim trajectory format
         alpasim_traj: Trajectory = self._convert_prediction_to_alpasim_trajectory(
             prediction, job.pose, job.timestamp_us
         )
@@ -965,7 +790,7 @@ class EgoDriverService(EgodriverServiceServicer):
             "trajectory_points": len(alpasim_traj.poses),
             "reasoning_text": reasoning_text,
         }
-        debug_info = DriveResponse.DebugInfo(
+        debug_info = DriveResponseDebugInfo(
             unstructured_debug_info=pickle.dumps(debug_data)
         )
         response = DriveResponse(trajectory=alpasim_traj, debug_info=debug_info)
@@ -979,38 +804,22 @@ class EgoDriverService(EgodriverServiceServicer):
         current_pose: PoseAtTime,
         time_now_us: int,
     ) -> Trajectory:
-        """Convert model prediction to Alpasim trajectory format.
-
-        If the model provides headings, use them directly.
-        Otherwise, compute headings from position deltas (existing behavior).
-
-        Args:
-            prediction: Model prediction with trajectory_xy and optional headings.
-            current_pose: Current vehicle pose in local frame.
-            time_now_us: Current time in microseconds.
-
-        Returns:
-            Alpasim Trajectory protobuf message.
-        """
-        trajectory = Trajectory()
-        trajectory.poses.append(current_pose)
+        """Convert model prediction to Alpasim trajectory format."""
+        trajectory_poses = [current_pose]
 
         model_trajectory = prediction.trajectory_xy
         if model_trajectory is None or len(model_trajectory) == 0:
-            return trajectory
+            return Trajectory(poses=trajectory_poses)
 
         curr_z = current_pose.pose.vec.z
         frequency_hz = self._model.output_frequency_hz
         time_delta_us = int(1_000_000 / frequency_hz)
         time_step = 1.0 / frequency_hz
 
-        # Apply trajectory optimization in rig frame if enabled
         optimized_trajectory = model_trajectory
         if self._trajectory_optimizer is not None and len(model_trajectory) >= 2:
-            # Add heading to create [N, 3] trajectory for optimizer
             rig_trajectory = add_heading_to_trajectory(model_trajectory)
 
-            # Run optimization
             opt_cfg = self._cfg.trajectory_optimizer
             result = self._trajectory_optimizer.optimize(
                 trajectory=rig_trajectory,
@@ -1021,7 +830,6 @@ class EgoDriverService(EgodriverServiceServicer):
             )
 
             if result.success:
-                # Extract x,y from optimized trajectory
                 optimized_trajectory = result.trajectory[:, :2]
                 logger.debug(
                     "Trajectory optimization succeeded: iterations=%s, cost=%.4f",
@@ -1031,20 +839,17 @@ class EgoDriverService(EgodriverServiceServicer):
             else:
                 logger.warning("Trajectory optimization failed: %s", result.message)
 
-        # Convert rig offsets to local frame positions
         local_positions = _rig_est_offsets_to_local_positions(
             current_pose, optimized_trajectory
         )
         num_positions = local_positions.shape[0]
 
         if num_positions == 0:
-            return trajectory
+            return Trajectory(poses=trajectory_poses)
 
-        # Pre-compute timestamps
         steps = np.arange(1, num_positions + 1, dtype=np.int64)
         timestamps_us = (time_now_us + steps * time_delta_us).tolist()
 
-        # Transform model headings from rig frame to local frame
         current_yaw = _quat_to_yaw(current_pose.pose.quat)
         local_yaws = prediction.headings + current_yaw
 
@@ -1053,7 +858,7 @@ class EgoDriverService(EgodriverServiceServicer):
         ):
             local_x, local_y = map(float, local_xy)
 
-            trajectory.poses.append(
+            trajectory_poses.append(
                 PoseAtTime(
                     pose=Pose(
                         vec=Vec3(x=local_x, y=local_y, z=curr_z),
@@ -1063,100 +868,77 @@ class EgoDriverService(EgodriverServiceServicer):
                 )
             )
 
-        return trajectory
+        return Trajectory(poses=trajectory_poses)
 
-    @async_log_call
-    async def shut_down(
-        self, request: Empty, context: grpc.aio.ServicerContext
-    ) -> Empty:
-        logger.info("shut_down requested, scheduling deferred shutdown")
-        # Schedule shutdown to happen after RPC completes to avoid CancelledError
-        asyncio.create_task(self._deferred_shutdown())
-        return Empty()
+    def shut_down(self, request) -> None:
+        logger.info("shut_down requested")
+        self._stop.set()
 
-    async def _deferred_shutdown(self) -> None:
-        """Shutdown the server and worker after the shut_down RPC completes.
-
-        This deferred approach prevents the shut_down RPC from cancelling itself
-        when stopping the server, which would result in asyncio.exceptions.CancelledError.
-        """
-        # Small delay to ensure the shut_down RPC response is sent first
-        await asyncio.sleep(0.1)
-        logger.info("Executing deferred shutdown")
-        await self._grpc_server.stop(grace=None)
-        await self.stop_worker()
+    async def run(self):
+        """모든 endpoint의 serve 루프를 동시에 실행."""
+        await asyncio.gather(
+            self._endpoints.session_start.serve(self.start_session, self._stop),
+            self._endpoints.session_close.serve(self.close_session, self._stop),
+            self._endpoints.image.serve(self.submit_image_observation, self._stop),
+            self._endpoints.egomotion.serve(self.submit_egomotion_observation, self._stop),
+            self._endpoints.route.serve(self.submit_route, self._stop),
+            self._endpoints.ground_truth.serve(self.submit_recording_ground_truth, self._stop),
+            self._endpoints.drive.serve(self.drive, self._stop),
+            self._endpoints.version.serve(self.get_version, self._stop),
+            self._endpoints.shutdown.serve(self.shut_down, self._stop),
+        )
 
 
 async def serve(cfg: DriverConfig) -> None:
-    """Start the gRPC server with the driver service."""
-    server = grpc.aio.server()
+    """Start the DDS driver service."""
     loop = asyncio.get_running_loop()
+    participant = get_participant()
+    endpoints = DriverServerEndpoints(participant)
 
     service = EgoDriverService(
         cfg=cfg,
         loop=loop,
-        grpc_server=server,
+        endpoints=endpoints,
     )
-    add_EgodriverServiceServicer_to_server(service, server)
 
-    address = f"{cfg.host}:{cfg.port}"
-    server.add_insecure_port(address)
-
-    await server.start()
     external_ip = _get_external_ip()
     logger.info(
-        "Starting %s driver on %s (external IP: %s:%d)",
+        "Starting %s driver (DDS, external IP: %s)",
         cfg.model.model_type.value,
-        address,
         external_ip,
-        cfg.port,
     )
 
     try:
-        await server.wait_for_termination()
+        await service.run()
     finally:
         await service.stop_worker()
 
 
-def _run_grpc_in_thread(cfg: DriverConfig, ready_event: threading.Event) -> None:
-    """Run the gRPC server in a background thread.
-
-    Used when the main thread is needed for GUI (e.g., ManualModel on macOS).
-
-    Args:
-        cfg: Driver configuration.
-        ready_event: Event to signal when the service is initialized.
-    """
+def _run_dds_in_thread(cfg: DriverConfig, ready_event: threading.Event) -> None:
+    """Run the DDS server in a background thread (for ManualModel GUI)."""
 
     async def serve_with_signal() -> None:
-        server = grpc.aio.server()
         loop = asyncio.get_running_loop()
+        participant = get_participant()
+        endpoints = DriverServerEndpoints(participant)
 
         service = EgoDriverService(
             cfg=cfg,
             loop=loop,
-            grpc_server=server,
+            endpoints=endpoints,
         )
-        add_EgodriverServiceServicer_to_server(service, server)
 
-        address = f"{cfg.host}:{cfg.port}"
-        server.add_insecure_port(address)
-
-        await server.start()
         external_ip = _get_external_ip()
         logger.info(
-            "Starting %s driver on %s (external IP: %s:%d)",
+            "Starting %s driver (DDS, external IP: %s)",
             cfg.model.model_type.value,
-            address,
             external_ip,
-            cfg.port,
         )
 
-        # Signal that the service (and model) is ready
         ready_event.set()
 
         try:
-            await server.wait_for_termination()
+            await service.run()
         finally:
             await service.stop_worker()
 
@@ -1184,30 +966,25 @@ def main(hydra_cfg: DriverConfig) -> None:
         config_filename = f"{cfg.model.model_type.value}-driver.yaml"
         OmegaConf.save(cfg, os.path.join(cfg.output_dir, config_filename), resolve=True)
 
-    # For ManualModel, run the GUI on the main thread and gRPC in a background
-    # thread. This is required on macOS (Cocoa), and we use the same approach
-    # on Linux for consistency and simpler maintenance.
     if cfg.model.model_type == ModelType.MANUAL:
-        logger.info("Starting gRPC server in background thread (GUI mode)")
+        logger.info("Starting DDS server in background thread (GUI mode)")
 
         ready_event = threading.Event()
-        grpc_thread = threading.Thread(
-            target=_run_grpc_in_thread,
+        dds_thread = threading.Thread(
+            target=_run_dds_in_thread,
             args=(cfg, ready_event),
-            name="grpc-server",
+            name="dds-server",
             daemon=True,
         )
-        grpc_thread.start()
+        dds_thread.start()
 
-        # Wait for the service (and ManualModel) to be created
         ready_event.wait(timeout=30.0)
 
-        # Run pygame loop on main thread using the singleton GUI instance
         if ManualModel._gui_instance is not None:
             ManualModel._gui_instance.run_main_loop()
         else:
-            logger.warning("ManualModel GUI not initialized, waiting for gRPC thread")
-            grpc_thread.join()
+            logger.warning("ManualModel GUI not initialized, waiting for DDS thread")
+            dds_thread.join()
 
         return
 

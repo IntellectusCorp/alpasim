@@ -191,3 +191,86 @@ class ServiceBase(ABC, Generic[StubType]):
             )
 
         return incompatibilities
+
+
+class DDSServiceBase(ABC):
+    """DDS 기반 서비스의 베이스 클래스.
+
+    ServiceBase와 동일한 세션 인터페이스를 제공하되,
+    gRPC 채널/스텁 대신 endpoints(DDSTransport 묶음)를 사용한다.
+    """
+
+    endpoints_class: Type  # DriverEndpoints, ControllerEndpoints, PhysicsEndpoints
+
+    def __init__(self, participant, skip: bool = False, id: int = 0):
+        self.skip = skip
+        self.id = id
+        self.session_info: Optional[SessionInfo] = None
+        self._available_scenes: Optional[List[str]] = None
+        self.endpoints = self.endpoints_class(participant) if not skip else None
+
+    @property
+    def name(self) -> str:
+        return f"{self.__class__.__name__}(id={self.id})"
+
+    def session(
+        self, uuid: str, broadcaster: MessageBroadcaster, **kwargs: Any
+    ) -> "DDSServiceBase":
+        assert self.session_info is None, "Session already set up"
+        self.session_info = SessionInfo(
+            uuid=uuid, broadcaster=broadcaster, additional_args=kwargs
+        )
+        return self
+
+    async def _initialize_session(
+        self, session_info: SessionInfo, **kwargs: Any
+    ) -> None:
+        pass
+
+    async def _cleanup_session(self, session_info: SessionInfo, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> "DDSServiceBase":
+        if self.session_info:
+            await self._initialize_session(session_info=self.session_info)
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        if self.session_info:
+            await self._cleanup_session(session_info=self.session_info)
+            self.session_info = None
+
+    async def get_version(self) -> VersionId:
+        """Get version information from the service via DDS."""
+        if self.skip:
+            return VersionId(
+                version_id="<skip>",
+                git_hash="<skip>",
+                grpc_api_version=API_VERSION_MESSAGE,
+            )
+
+        from alpasim_dds.types.common import VersionRequest
+        from alpasim_utils.dds_to_proto import version_response_to_proto
+
+        response = await self.endpoints.version.request(VersionRequest())
+        return version_response_to_proto(response)
+
+    async def get_available_scenes(self) -> List[str]:
+        if self.skip:
+            return [WILDCARD_SCENE_ID]
+        return [WILDCARD_SCENE_ID]  # 서브클래스에서 오버라이드
+
+    async def find_scenario_incompatibilities(
+        self, scenario: ScenarioConfig
+    ) -> List[str]:
+        incompatibilities = []
+        available_scenes = await self.get_available_scenes()
+        if (
+            scenario.scene_id not in available_scenes
+            and WILDCARD_SCENE_ID not in available_scenes
+        ):
+            incompatibilities.append(
+                f"Scene {scenario.scene_id} not available in {self.__class__.__name__} service. "
+                f"Available scenes: {sorted(available_scenes)}"
+            )
+        return incompatibilities

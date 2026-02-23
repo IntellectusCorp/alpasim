@@ -50,3 +50,41 @@ class DDSTransport:
         raise TimeoutError(
             f"correlation_id={correlation_id} 응답 없음 ({timeout_s}s 초과)"
         )
+
+
+class DDSServerTransport:
+    """서버 측 transport. 클라이언트의 반대 방향으로 동작.
+
+    - req topic을 읽고, resp topic에 쓴다.
+    - resp_type이 있으면 양방향 (handler 결과를 resp로 write)
+    - resp_type이 없으면 단방향 (handler 호출만, 응답 없음)
+    """
+
+    def __init__(self, participant, name, req_type, resp_type=None, qos=RELIABLE_QOS):
+        self.reader = DataReader(
+            participant, Topic(participant, f"{name}/req", req_type), qos=qos
+        )
+        if resp_type is not None:
+            self.writer = DataWriter(
+                participant, Topic(participant, f"{name}/resp", resp_type), qos=qos
+            )
+        else:
+            self.writer = None
+
+    async def serve(self, handler, stop_event=None):
+        """요청을 polling하고 handler 호출, 양방향이면 응답 write.
+
+        handler는 async 또는 sync 함수. 반환값이 있으면 응답으로 write.
+        stop_event가 set되면 루프를 종료.
+        """
+        while stop_event is None or not stop_event.is_set():
+            for sample in self.reader.take():
+                if asyncio.iscoroutinefunction(handler):
+                    result = await handler(sample)
+                else:
+                    result = handler(sample)
+                if self.writer is not None and result is not None:
+                    if hasattr(sample, "correlation_id"):
+                        result.correlation_id = sample.correlation_id
+                    self.writer.write(result)
+            await asyncio.sleep(0.001)

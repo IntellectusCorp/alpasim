@@ -1,16 +1,17 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025-2026 NVIDIA Corporation
-
-"""Driver service implementation."""
+"""Driver service implementation (DDS)."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional, Type, TypeAlias
+from typing import Any, List, Optional
 
 import numpy as np
-from alpasim_grpc.v0.common_pb2 import DynamicState
-from alpasim_grpc.v0.egodriver_pb2 import (
+from alpasim_dds.endpoints.driver import DriverEndpoints
+from alpasim_dds.types.camera import AvailableCamera
+from alpasim_dds.types.common import DynamicState
+from alpasim_dds.types.egodriver import (
+    CameraImage,
+    DebugInfo,
     DriveRequest,
     DriveResponse,
     DriveSessionCloseRequest,
@@ -19,40 +20,39 @@ from alpasim_grpc.v0.egodriver_pb2 import (
     GroundTruthRequest,
     RolloutCameraImage,
     RolloutEgoTrajectory,
+    RolloutSpec,
     RouteRequest,
+    VehicleDefinition,
 )
-from alpasim_grpc.v0.egodriver_pb2_grpc import EgodriverServiceStub
 from alpasim_grpc.v0.logging_pb2 import LogEntry
-from alpasim_grpc.v0.sensorsim_pb2 import AvailableCamerasReturn
 from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.services.service_base import (
+    DDSServiceBase,
     WILDCARD_SCENE_ID,
-    ServiceBase,
     SessionInfo,
 )
-from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
+from alpasim_utils.dds_to_proto import (
+    drive_request_to_proto,
+    drive_response_to_proto,
+    drive_session_request_to_proto,
+    ground_truth_request_to_proto,
+    rollout_camera_image_to_proto,
+    rollout_ego_trajectory_to_proto,
+    route_request_to_proto,
+)
 from alpasim_utils.polyline import Polyline
+from alpasim_utils.qvec import QVec
 from alpasim_utils.trajectory import Trajectory
 from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
 
-AvailableCamera: TypeAlias = AvailableCamerasReturn.AvailableCamera
 
+class DriverService(DDSServiceBase):
+    """Driver service — DDS 기반. 자율주행 정책과의 통신을 담당."""
 
-class DriverService(ServiceBase[EgodriverServiceStub]):
-    """
-    Service for interacting with the autonomous driving policy.
+    endpoints_class = DriverEndpoints
 
-    This service handles communication with the driver model, including
-    submitting sensor observations and receiving driving decisions.
-    """
-
-    @property
-    def stub_class(self) -> Type[EgodriverServiceStub]:
-        return EgodriverServiceStub
-
-    # Override the session method to add typed parameters
     def session(  # type: ignore[override]
         self,
         uuid: str,
@@ -60,11 +60,8 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         random_seed: int,
         sensorsim_cameras: list[AvailableCamera],
         scene_id: Optional[str] = None,
-    ) -> "ServiceBase[EgodriverServiceStub]":
-        """Create a driver session with typed parameters.
-
-        These are used in `_initialize_session()`.
-        """
+    ) -> "DriverService":
+        """Create a driver session with typed parameters."""
         return super().session(
             uuid=uuid,
             broadcaster=broadcaster,
@@ -76,7 +73,6 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     async def _initialize_session(
         self, session_info: SessionInfo, **kwargs: Any
     ) -> None:
-        """Initialize driver session after gRPC connection is established."""
         await super()._initialize_session(session_info=session_info)
 
         random_seed: int = session_info.additional_args["random_seed"]
@@ -85,49 +81,42 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             "sensorsim_cameras"
         ]
 
-        rollout_spec = DriveSessionRequest.RolloutSpec(
-            vehicle=DriveSessionRequest.RolloutSpec.VehicleDefinition(
-                available_cameras=sensorsim_cameras,
-            ),
-        )
-
         request = DriveSessionRequest(
             session_uuid=self.session_info.uuid,
             random_seed=random_seed,
-            debug_info=DriveSessionRequest.DebugInfo(scene_id=scene_id),
-            rollout_spec=rollout_spec,
+            debug_info=DebugInfo(scene_id=scene_id or ""),
+            rollout_spec=RolloutSpec(
+                vehicle=VehicleDefinition(
+                    available_cameras=sensorsim_cameras,
+                ),
+            ),
         )
 
-        await self.session_info.broadcaster.broadcast(
-            LogEntry(driver_session_request=request)
+        await session_info.broadcaster.broadcast(
+            LogEntry(driver_session_request=drive_session_request_to_proto(request))
         )
 
         if self.skip:
             return
 
-        await profiled_rpc_call(
-            "start_session", "driver", self.stub.start_session, request
-        )
+        await self.endpoints.session_start.request(request)
 
-    async def _cleanup_session(self, **kwargs: Any) -> None:
-        """Clean up driver session."""
+    async def _cleanup_session(self, session_info: SessionInfo, **kwargs: Any) -> None:
         if self.skip:
             return
 
-        close_request = DriveSessionCloseRequest(session_uuid=self.session_info.uuid)
-        await profiled_rpc_call(
-            "close_session", "driver", self.stub.close_session, close_request
+        self.endpoints.session_close.send(
+            DriveSessionCloseRequest(session_uuid=self.session_info.uuid)
         )
 
     async def get_available_scenes(self) -> List[str]:
-        """Get list of available scenes from the driver service."""
         return [WILDCARD_SCENE_ID]
 
     async def submit_image(self, image: ImageWithMetadata) -> None:
         """Submit an image observation for the current session."""
         request = RolloutCameraImage(
             session_uuid=self.session_info.uuid,
-            camera_image=RolloutCameraImage.CameraImage(
+            camera_image=CameraImage(
                 frame_start_us=image.start_timestamp_us,
                 frame_end_us=image.end_timestamp_us,
                 image_bytes=image.image_bytes,
@@ -136,70 +125,52 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         )
 
         await self.session_info.broadcaster.broadcast(
-            LogEntry(driver_camera_image=request)
+            LogEntry(driver_camera_image=rollout_camera_image_to_proto(request))
         )
 
         if self.skip:
             return
 
-        await profiled_rpc_call(
-            "submit_image_observation",
-            "driver",
-            self.stub.submit_image_observation,
-            request,
-        )
+        self.endpoints.image.send(request)
 
     async def submit_trajectory(
         self,
         trajectory: Trajectory,
         dynamic_state: DynamicState,
     ) -> None:
-        """Submit an egomotion trajectory for the current session.
-
-        Args:
-            trajectory: The estimated ego trajectory.
-            dynamic_state: The estimated dynamic state (velocities, accelerations) in rig frame.
-        """
+        """Submit an egomotion trajectory for the current session."""
         request = RolloutEgoTrajectory(
             session_uuid=self.session_info.uuid,
-            trajectory=trajectory.to_grpc(),
+            trajectory=trajectory.to_dds(),
             dynamic_state=dynamic_state,
         )
 
         await self.session_info.broadcaster.broadcast(
-            LogEntry(driver_ego_trajectory=request)
+            LogEntry(driver_ego_trajectory=rollout_ego_trajectory_to_proto(request))
         )
 
         if self.skip:
             return
 
-        await profiled_rpc_call(
-            "submit_egomotion_observation",
-            "driver",
-            self.stub.submit_egomotion_observation,
-            request,
-        )
+        self.endpoints.egomotion.send(request)
 
     async def submit_route(
         self, timestamp_us: int, route_polyline_in_rig: Polyline
     ) -> None:
         """Submit a route for the current session."""
-        # Convert the route polyline to gRPC Route format
-        grpc_route = route_polyline_in_rig.to_grpc_route(timestamp_us)
-
         request = RouteRequest(
             session_uuid=self.session_info.uuid,
-            route=grpc_route,
+            route=route_polyline_in_rig.to_dds_route(timestamp_us),
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(route_request=request))
+        await self.session_info.broadcaster.broadcast(
+            LogEntry(route_request=route_request_to_proto(request))
+        )
 
         if self.skip:
             return
 
-        await profiled_rpc_call(
-            "submit_route", "driver", self.stub.submit_route, request
-        )
+        self.endpoints.route.send(request)
 
     async def submit_recording_ground_truth(
         self, timestamp_us: int, trajectory: Trajectory
@@ -209,33 +180,24 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             session_uuid=self.session_info.uuid,
             ground_truth=GroundTruth(
                 timestamp_us=timestamp_us,
-                trajectory=trajectory.to_grpc(),
+                trajectory=trajectory.to_dds(),
             ),
         )
 
         await self.session_info.broadcaster.broadcast(
-            LogEntry(ground_truth_request=request)
+            LogEntry(ground_truth_request=ground_truth_request_to_proto(request))
         )
 
         if self.skip:
             return
 
-        await profiled_rpc_call(
-            "submit_recording_ground_truth",
-            "driver",
-            self.stub.submit_recording_ground_truth,
-            request,
-        )
+        self.endpoints.ground_truth.send(request)
 
     async def drive(
         self, time_now_us: int, time_query_us: int, renderer_data: Optional[bytes]
     ) -> Trajectory:
-        """Request a drive decision for the current session.
+        """Request a drive decision for the current session."""
 
-        Returns:
-            Trajectory containing the selected trajectory for the ego vehicle.
-        """
-        # Create request with both old and new fields for backward compatibility
         request = DriveRequest(
             session_uuid=self.session_info.uuid,
             time_now_us=time_now_us,
@@ -243,45 +205,33 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             renderer_data=renderer_data or b"",
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(driver_request=request))
+        await self.session_info.broadcaster.broadcast(
+            LogEntry(driver_request=drive_request_to_proto(request))
+        )
 
         if self.skip:
-            # Create a trajectory response with multiple future timestamps.
-            # This enables plan_deviation scorer to compute metrics by comparing
-            # overlapping timestamps between consecutive drive calls.
-            from alpasim_utils.qvec import QVec
-
-            # Generate timestamps extending 5 seconds into the future at 100ms intervals
             num_points = 50
             interval_us = 100_000  # 100ms
             timestamps = np.array(
                 [time_now_us + i * interval_us for i in range(num_points)],
                 dtype=np.uint64,
             )
-
-            # Create QVec poses - simple straight-line trajectory moving forward
             poses = QVec.stack(
                 [
                     QVec(
-                        vec3=np.array([i * 0.5, 0.0, 0.0]),  # 0.5m per step = 5m/s
+                        vec3=np.array([i * 0.5, 0.0, 0.0]),
                         quat=np.array([0.0, 0.0, 0.0, 1.0]),
                     )
                     for i in range(num_points)
                 ]
             )
+            skip_trajectory = Trajectory(timestamps_us=timestamps, poses=poses)
+            return skip_trajectory
 
-            trajectory = Trajectory(
-                timestamps_us=timestamps,
-                poses=poses,
-            )
-            response = DriveResponse(
-                trajectory=trajectory.to_grpc(),
-            )
-        else:
-            response = await profiled_rpc_call(
-                "drive", "driver", self.stub.drive, request
-            )
+        response = await self.endpoints.drive.request(request)
 
-        await self.session_info.broadcaster.broadcast(LogEntry(driver_return=response))
+        await self.session_info.broadcaster.broadcast(
+            LogEntry(driver_return=drive_response_to_proto(response))
+        )
 
-        return Trajectory.from_grpc(response.trajectory)
+        return Trajectory.from_dds(response.trajectory)

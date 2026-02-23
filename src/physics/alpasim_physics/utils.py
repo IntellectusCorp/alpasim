@@ -6,6 +6,9 @@ from alpasim_grpc.v0.common_pb2 import AABB, Pose, Quat, Vec3
 from alpasim_grpc.v0.physics_pb2 import PhysicsGroundIntersectionReturn
 from scipy.spatial.transform import Rotation as R
 
+from alpasim_dds.types.common import Pose as DdsPose, Vec3 as DdsVec3, Quat as DdsQuat
+from alpasim_dds.types.physics import ReturnPose, GroundIntersectionStatus as DdsStatus
+
 
 def batch_so3_trans_2_se3(
     so3: np.ndarray = np.eye(3), trans: np.ndarray = np.zeros((3,))
@@ -78,6 +81,37 @@ def pose_grpc_to_ndarray(pose: Pose) -> np.ndarray:
     ndarray_pose[:3, :3] = rot
     ndarray_pose[:3, 3] = vec
     return ndarray_pose
+
+
+# ---------------------------------------------------------------------------
+# DDS conversions
+# ---------------------------------------------------------------------------
+
+
+def pose_dds_to_ndarray(pose: DdsPose) -> np.ndarray:
+    rot = R.from_quat([pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w]).as_matrix()
+    vec = np.array([pose.vec.x, pose.vec.y, pose.vec.z])
+    ndarray_pose = np.eye(4)
+    ndarray_pose[:3, :3] = rot
+    ndarray_pose[:3, 3] = vec
+    return ndarray_pose
+
+
+def aabb_dds_to_ndarray(aabb) -> np.ndarray:
+    return np.array([aabb.size_x, aabb.size_y, aabb.size_z])
+
+
+def pose_status_to_dds(pose: np.ndarray, status) -> ReturnPose:
+    assert pose.shape == (4, 4)
+    quat = R.from_matrix(pose[:3, :3]).as_quat(canonical=False)
+    dds_status = DdsStatus(status.value)
+    return ReturnPose(
+        pose=DdsPose(
+            vec=DdsVec3(x=float(pose[0, 3]), y=float(pose[1, 3]), z=float(pose[2, 3])),
+            quat=DdsQuat(x=float(quat[0]), y=float(quat[1]), z=float(quat[2]), w=float(quat[3])),
+        ),
+        status=dds_status,
+    )
 
 
 """

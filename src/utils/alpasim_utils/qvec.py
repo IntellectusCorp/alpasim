@@ -185,6 +185,11 @@ class QVec:
             quat=DdsQuat(x=float(self.quat[0]), y=float(self.quat[1]), z=float(self.quat[2]), w=float(self.quat[3])),
         )
 
+    def to_dds_pose_at_time(self, timestamp_us: int):
+        from alpasim_dds.types.common import PoseAtTime as DdsPoseAtTime
+
+        return DdsPoseAtTime(pose=self.as_dds_pose(), timestamp_us=timestamp_us)
+
     @staticmethod
     def from_dds_pose(dds_pose) -> "QVec":
         return QVec(
