@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpasim_dds"
+version = "0.1.0"
+description = "DDS transport layer for Alpamayo Sim (Driver, Controller, Physics)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "cyclonedds",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["alpasim_dds*"]

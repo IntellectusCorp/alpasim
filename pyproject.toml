@@ -10,6 +10,7 @@ dependencies = [
 [tool.uv.workspace]
 members = [
   "src/controller",
+  "src/dds",
   "src/eval",
   "src/grpc",
   "src/runtime",
