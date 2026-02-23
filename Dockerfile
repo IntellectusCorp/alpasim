@@ -1,7 +1,7 @@
 # Example command (run from repo root):
 #   docker build --secret id=netrc,src=$HOME/.netrc -t alpasim_base:latest -f Dockerfile .
 
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM nvcr.io/nvidia/pytorch:25.06-py3
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     git \
     ffmpeg \
     cmake \
-    build-essential \
+    libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install CycloneDDS C library (required by cyclonedds Python package)
@@ -32,14 +32,35 @@ ENV UV_LINK_MODE=copy
 WORKDIR /repo/src/grpc
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    NETRC=/root/.netrc uv sync --package alpasim_grpc
-RUN uv run compile-protos --no-sync
+    NETRC=/root/.netrc uv sync
+RUN uv pip install --reinstall "setuptools<70" && uv run --no-sync compile-protos
 
 WORKDIR /repo
 
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
     NETRC=/root/.netrc uv sync --all-packages
+
+# Reuse PyTorch from base image instead of uv-installed copy
+RUN rm -rf /repo/.venv/lib/python3.12/site-packages/torch \
+             /repo/.venv/lib/python3.12/site-packages/torchvision \
+             /repo/.venv/lib/python3.12/site-packages/torchaudio && \
+      ln -s /usr/local/lib/python3.12/dist-packages/torch /repo/.venv/lib/python3.12/site-packages/torch && \
+      ln -s /usr/local/lib/python3.12/dist-packages/torchvision /repo/.venv/lib/python3.12/site-packages/torchvision && \
+      ln -s /usr/local/lib/python3.12/dist-packages/torchaudio /repo/.venv/lib/python3.12/site-packages/torchaudio && \
+      uv pip install "numpy<2"
+
+# Install pre-built ARM64 wheel for point-cloud-utils after uv sync
+RUN if [ -f /repo/point_cloud_utils-0.35.0-cp312-cp312-linux_aarch64.whl ]; then \
+    uv pip install /repo/point_cloud_utils-0.35.0-cp312-cp312-linux_aarch64.whl; \
+    fi
+
+# Note: maglev.av has name collisions with PyAV (both use `import av`).
+# Patch torchvision to trigger its "av not available" fallback path.
+RUN for f in .venv/lib/python*/site-packages/torchvision/io/video.py \
+             .venv/lib/python*/site-packages/torchvision/io/video_reader.py; do \
+        [ -f "$f" ] && sed -i 's/import av$/raise ImportError("maglev.av collision")/' "$f"; \
+    done || true
 
 ENV UV_CACHE_DIR=/tmp/uv-cache
 ENV UV_NO_SYNC=1
