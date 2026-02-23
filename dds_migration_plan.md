@@ -188,7 +188,7 @@ class DriverEndpoints:
 
 **수정 순서:** Physics → Controller → Driver (복잡도 순)
 
-#### ① `src/runtime/alpasim_runtime/services/physics_service.py`
+#### ① `src/runtime/alpasim_runtime/services/physics_service.py` ✅
 
 ```python
 # 변경 전
@@ -206,7 +206,7 @@ class PhysicsService:
         response = await self.endpoints.ground_intersection.request(request)
 ```
 
-#### ② `src/runtime/alpasim_runtime/services/controller_service.py`
+#### ② `src/runtime/alpasim_runtime/services/controller_service.py` ✅
 
 ```python
 # 변경 전
@@ -223,7 +223,7 @@ class ControllerService:
         await self.endpoints.session_start.request(request)
 ```
 
-#### ③ `src/runtime/alpasim_runtime/services/driver_service.py`
+#### ③ `src/runtime/alpasim_runtime/services/driver_service.py` ✅
 
 ```python
 # 변경 전
@@ -246,7 +246,7 @@ class DriverService:
         response = await self.endpoints.drive.request(request)  # 양방향
 ```
 
-### Phase 3: 서버 측 마이그레이션
+### Phase 3: 서버 측 마이그레이션 ✅
 
 서버는 클라이언트의 반대 방향으로 DDSTransport를 구성.
 클라이언트가 `req` topic에 write → 서버가 `req` topic을 read → 처리 → `resp` topic에 write.
@@ -279,16 +279,28 @@ class DDSServiceHandler:
 
 | 서버 | 현재 파일 | 변경 내용 |
 |------|----------|----------|
-| Driver | `src/driver/src/alpasim_driver/main.py` | gRPC servicer → DDSServiceHandler |
-| Controller | `src/controller/alpasim_controller/server.py` | gRPC servicer → DDSServiceHandler |
-| Physics | `src/physics/alpasim_physics/server.py` | gRPC servicer → DDSServiceHandler |
+| Driver | `src/driver/src/alpasim_driver/main.py` | gRPC servicer → DDSServiceHandler ✅ |
+| Controller | `src/controller/alpasim_controller/server.py` | gRPC servicer → DDSServiceHandler ✅ |
+| Physics | `src/physics/alpasim_physics/server.py` | gRPC servicer → DDSServiceHandler ✅ |
 
 #### 기타 수정 대상
 
 | 파일 | 변경 내용 |
 |------|----------|
-| `src/runtime/alpasim_runtime/validation.py` | Physics의 `get_version`, `get_available_scenes` 검증을 DDS 경유로 변경 (Sensorsim/Traffic 검증은 gRPC 유지) |
-| `src/runtime/alpasim_runtime/simulate/__main__.py` | DDS 서비스(Driver, Controller, Physics)의 `shut_down` 호출을 DDSTransport `.send()`로 변경 (Sensorsim은 gRPC 유지) |
+| `src/runtime/alpasim_runtime/validation.py` | Physics의 `get_version`, `get_available_scenes` 검증을 DDS 경유로 변경 (Sensorsim/Traffic 검증은 gRPC 유지) | ✅ |
+| `src/runtime/alpasim_runtime/simulate/__main__.py` | DDS 서비스(Driver, Controller, Physics)의 `shut_down` 호출을 DDSTransport `.send()`로 변경 (Sensorsim은 gRPC 유지) | ✅ |
+
+- LogEntry broadcasting ✅
+
+DDS 타입 → protobuf 타입 변환 함수를 `src/utils/alpasim_utils/dds_to_proto.py`에 구현하여 해결.
+서비스에서 DDS 통신 전후로 `LogEntry` broadcast를 복원함 (방안 1 채택).
+
+구현 내용:
+- `dds_to_proto.py`: 20개 변환 함수 (common, egodriver, controller, physics)
+- `driver_service.py`: 6곳 broadcast 복원
+- `controller_service.py`: 1곳 broadcast 복원 (req+resp)
+- `physics_service.py`: 1곳 broadcast 복원 (req+resp)
+- `test_dds_to_proto.py`: 23개 유닛 테스트
 
 ---
 
@@ -381,126 +393,16 @@ src/dds    → Driver, Controller, Physics용 (내부 서비스, DDS 전환)
    - 실제 서버를 띄우고 세션 전체 흐름 테스트
    - gRPC 서버 → DDSServiceHandler로 교체 후 동일 시나리오 검증
 
-### Phase별 테스트
-
-#### Phase 1 테스트: DDSTransport 단위 테스트
-
-전체 시뮬레이션 없이, DDS 레이어만 독립 검증:
-
-```python
-# test_dds_transport.py
-async def test_request_response_roundtrip():
-    """양방향 DDSTransport의 request/response 검증"""
-    participant = DDSParticipant(domain_id=0)
-
-    client = DDSTransport(participant, "test/drive", TestRequest, TestResponse)
-    # 서버 역할 (reader/writer를 직접 구성)
-    server_reader = DataReader(participant, Topic(participant, "test/drive/req", TestRequest))
-    server_writer = DataWriter(participant, Topic(participant, "test/drive/resp", TestResponse))
-
-    # 비동기로 서버 응답 처리
-    async def mock_server():
-        await waitset.wait_async()
-        for sample in server_reader.take():
-            server_writer.write(TestResponse(correlation_id=sample.correlation_id, result="ok"))
-
-    asyncio.create_task(mock_server())
-    response = await client.request(TestRequest(data="hello"))
-    assert response.result == "ok"
-
-async def test_send_fire_and_forget():
-    """단방향 DDSTransport의 send 검증 — reader에서 수신 확인"""
-    ...
-
-async def test_correlation_id_matching():
-    """여러 요청이 비동기로 올 때 correlation_id로 정확히 매칭되는지"""
-    ...
-
-async def test_request_timeout():
-    """응답이 없을 때 TimeoutError 발생 확인"""
-    ...
-```
-
-#### Phase 3 테스트: 서비스별 마이그레이션 검증
-
-각 서비스를 DDS로 전환할 때마다 아래 순서로 테스트:
-
-**① Physics (먼저)**
-
-```python
-async def test_physics_dds_matches_grpc():
-    """동일 입력에 대해 gRPC 결과와 DDS 결과 비교"""
-    grpc_service = PhysicsService(address="localhost:50051")
-    dds_service = DDSPhysicsService(participant)
-
-    request_args = make_test_ground_intersection_args()
-
-    grpc_result = await grpc_service.ground_intersection(**request_args)
-    dds_result = await dds_service.ground_intersection(**request_args)
-
-    assert grpc_result == dds_result
-```
-
-**② Controller**
-
-```python
-async def test_controller_session_lifecycle():
-    """DDS로 세션 시작 → run_controller_and_vehicle → 세션 종료 흐름"""
-    ...
-
-async def test_controller_dds_matches_grpc():
-    """gRPC/DDS 결과 비교"""
-    ...
-```
-
-**③ Driver**
-
-```python
-async def test_driver_fire_and_forget_delivery():
-    """submit_image 등 4개 fire-and-forget이 서버에 도달하는지"""
-    ...
-
-async def test_driver_drive_request_response():
-    """drive() request-response 검증"""
-    ...
-
-async def test_driver_full_session():
-    """세션 시작 → 관측 전달 → drive → 세션 종료 전체 흐름"""
-    ...
-```
-
-#### Phase 4 테스트: ASL Replay 통합 검증
-
-기존 ASL replay 인프라를 DDS로 교체하여 전체 흐름 검증:
-
-```
-기존:  Runtime --gRPC--> ReplayServicer (녹화된 응답 반환) ✓
-전환:  Runtime --DDS---> DDSReplayServicer (동일 녹화 응답 반환) ✓
-```
-
-동일한 `.asl` 파일, 동일한 검증 로직. 전송 계층만 DDS로 바뀜.
 
 ### 최종: 전체 시뮬레이션 (1회)
 
 모든 서비스 마이그레이션 완료 후 실제 시뮬레이션 1회 실행하여 end-to-end 확인.
-
-### 테스트 순서 요약
-
-| 순서 | 대상 | 방법 | 전체 시뮬레이션 필요 |
-|------|------|------|:---:|
-| 1 | DDSTransport | 단위 테스트 | X |
-| 2 | Physics (통신 2개) | gRPC/DDS 결과 비교 | X |
-| 3 | Controller (통신 3개) | gRPC/DDS 비교 + 세션 흐름 | X |
-| 4 | Driver (통신 7개) | gRPC/DDS 비교 + fire-and-forget 검증 | X |
-| 5 | 통합 | ASL Replay (DDS replay servicer) | X |
-| 6 | End-to-end | 전체 시뮬레이션 실행 | O |
 
 ---
 
 ## 변경되지 않는 것
 
 - 시뮬레이션 루프 흐름 (①~⑦ 순서 동일)
-- `LogEntry` broadcasting (`session_info.broadcaster.broadcast`)
 - `skip` 모드 로직
 - Sensorsim / Traffic 서비스 (gRPC 유지)
 - `profiled_rpc_call()` 텔레메트리 — DDS 전환 시 제거, 필요시 DDSTransport 래퍼로 나중에 재구현
