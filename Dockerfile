@@ -37,9 +37,18 @@ RUN uv pip install --reinstall "setuptools<70" && uv run --no-sync compile-proto
 
 WORKDIR /repo
 
+# Sync all workspace packages except physics (point-cloud-utils has no aarch64 wheel on PyPI)
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    NETRC=/root/.netrc uv sync --all-packages
+    NETRC=/root/.netrc uv sync \
+    --package alpasim-controller \
+    --package alpasim-dds \
+    --package alpasim-eval \
+    --package alpasim-grpc \
+    --package alpasim-runtime \
+    --package alpasim-utils \
+    --package alpasim-tools \
+    --package alpasim-driver
 
 # Reuse PyTorch from base image instead of uv-installed copy
 RUN rm -rf /repo/.venv/lib/python3.12/site-packages/torch \
@@ -54,6 +63,9 @@ RUN rm -rf /repo/.venv/lib/python3.12/site-packages/torch \
 RUN if [ -f /repo/point_cloud_utils-0.35.0-cp312-cp312-linux_aarch64.whl ]; then \
     uv pip install /repo/point_cloud_utils-0.35.0-cp312-cp312-linux_aarch64.whl; \
     fi
+RUN --mount=type=secret,id=netrc,target=/root/.netrc \
+    --mount=type=cache,target=/root/.cache/uv \
+    NETRC=/root/.netrc uv sync --package alpasim-physics
 
 # Note: maglev.av has name collisions with PyAV (both use `import av`).
 # Patch torchvision to trigger its "av not available" fallback path.
