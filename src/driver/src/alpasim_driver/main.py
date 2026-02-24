@@ -45,7 +45,7 @@ from alpasim_dds.types.egodriver import (
     Route,
     RouteRequest,
 )
-from alpasim_dds.types.common import SessionRequestStatus, VersionResponse
+from alpasim_dds.types.common import APIVersion, SessionRequestStatus, VersionResponse
 from omegaconf import OmegaConf
 from PIL import Image
 
@@ -664,6 +664,7 @@ class EgoDriverService:
         return VersionResponse(
             version_id=f"{model_type}-driver-{driver_version}",
             git_hash="unknown",
+            api_version=APIVersion(major=0, minor=0, patch=1),
         )
 
     def submit_image_observation(self, request: RolloutCameraImage) -> None:
