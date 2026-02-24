@@ -12,10 +12,8 @@ __pycache__/
 .wizard*/
 
 # AI stuff
-.claude
 .serena
 .zed
-CLAUDE.md
 
 **/*.egg-info
 **/build/
