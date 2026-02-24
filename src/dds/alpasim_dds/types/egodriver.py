@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from cyclonedds.idl import IdlStruct
-from cyclonedds.idl.types import uint64, sequence
+from cyclonedds.idl.types import uint8, uint64, sequence
 
 from alpasim_dds.types.common import DynamicState, Trajectory, Vec3
 from alpasim_dds.types.camera import AvailableCamera
@@ -57,7 +57,7 @@ class DriveSessionCloseRequest(IdlStruct):
 class CameraImage(IdlStruct):
     frame_start_us: uint64 = 0
     frame_end_us: uint64 = 0
-    image_bytes: bytes = b""
+    image_bytes: sequence[uint8] = None
     logical_id: str = ""
 
 
@@ -124,12 +124,12 @@ class DriveRequest(IdlStruct):
     session_uuid: str = ""
     time_now_us: uint64 = 0
     time_query_us: uint64 = 0
-    renderer_data: bytes = b""
+    renderer_data: sequence[uint8] = None
 
 
 @dataclass
 class DriveResponseDebugInfo(IdlStruct):
-    unstructured_debug_info: bytes = b""
+    unstructured_debug_info: sequence[uint8] = None
     sampled_trajectories: sequence[Trajectory] = None
 
 
