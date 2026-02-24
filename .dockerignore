@@ -11,7 +11,9 @@
 !src/physics/**
 !src/controller/**
 !pyproject.toml
+!*.whl
 !src/driver/**
+!src/tools/**
 !src/wizard/configs/**
 
 # Exclude specific runtime directories/files we don't need
