@@ -129,7 +129,7 @@ class DriveRequest(IdlStruct):
 
 @dataclass
 class DriveResponseDebugInfo(IdlStruct):
-    unstructured_debug_info: sequence[uint8] = None
+    unstructured_debug_info: sequence[uint8] = ()
     sampled_trajectories: sequence[Trajectory] = None
 
 

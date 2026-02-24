@@ -44,15 +44,18 @@ class PhysicsSimService:
             artifact = self.artifacts[scene_id]
             logger.info(f"Cache miss, loading {artifact.scene_id=}")
             mesh_ply = artifact.mesh_ply
+            logger.info("Mesh PLY loaded, creating PhysicsBackend...")
             artifact.clear_cache()
-            return PhysicsBackend(mesh_ply, visualize=self.visualize)
+            backend = PhysicsBackend(mesh_ply, visualize=self.visualize)
+            logger.info("PhysicsBackend created successfully")
+            return backend
 
         self.get_backend = get_backend
 
     def ground_intersection(
         self, request: PhysicsGroundIntersectionRequest
     ) -> PhysicsGroundIntersectionReturn:
-        logger.debug(f"Received request for scene_id={request.scene_id}")
+        logger.info(f"ground_intersection request: scene_id={request.scene_id}, ego_data={'present' if request.ego_data is not None else 'None'}, other_objects={len(request.other_objects) if request.other_objects else 0}")
         backend = self.get_backend(request.scene_id)
 
         other_updates = []
@@ -75,18 +78,22 @@ class PhysicsSimService:
                 predicted_pose, ego_aabb, request.future_us
             )
 
-            return PhysicsGroundIntersectionReturn(
+            result = PhysicsGroundIntersectionReturn(
                 ego_pose=pose_status_to_dds(updated_ego_pose, updated_ego_status),
                 other_poses=[
                     pose_status_to_dds(pose, status) for pose, status in other_updates
                 ],
             )
+            logger.info(f"ground_intersection response: ego_pose={'present' if result.ego_pose else 'None'}, other_poses={len(result.other_poses) if result.other_poses else 0}")
+            return result
         else:
-            return PhysicsGroundIntersectionReturn(
+            result = PhysicsGroundIntersectionReturn(
                 other_poses=[
                     pose_status_to_dds(pose, status) for pose, status in other_updates
                 ],
             )
+            logger.info(f"ground_intersection response: ego_pose=None, other_poses={len(result.other_poses) if result.other_poses else 0}")
+            return result
 
     def get_available_scenes(self, request) -> AvailableScenesResponse:
         logger.info("get_available_scenes")

@@ -1,4 +1,6 @@
 import asyncio
+import inspect
+import logging
 from uuid import uuid4
 
 from cyclonedds.domain import DomainParticipant
@@ -7,6 +9,8 @@ from cyclonedds.sub import DataReader
 from cyclonedds.topic import Topic
 
 from alpasim_dds.qos import RELIABLE_QOS
+
+logger = logging.getLogger(__name__)
 
 
 class DDSTransport:
@@ -42,6 +46,9 @@ class DDSTransport:
     async def _wait_for_response(self, correlation_id):
         while True:
             for sample in self.reader.take():
+                if type(sample).__name__ == "InvalidSample":
+                    logger.info("Skipping InvalidSample in _wait_for_response")
+                    continue
                 if sample.correlation_id == correlation_id:
                     return sample
             await asyncio.sleep(0.001)
@@ -74,12 +81,23 @@ class DDSServerTransport:
         """
         while stop_event is None or not stop_event.is_set():
             for sample in self.reader.take():
-                if asyncio.iscoroutinefunction(handler):
-                    result = await handler(sample)
-                else:
-                    result = handler(sample)
+                if type(sample).__name__ == "InvalidSample":
+                    logger.info("Skipping InvalidSample")
+                    continue
+                try:
+                    if inspect.iscoroutinefunction(handler):
+                        result = await handler(sample)
+                    else:
+                        result = handler(sample)
+                except Exception:
+                    logger.exception("Exception during handler execution")
+                    continue
                 if self.writer is not None and result is not None:
                     if hasattr(sample, "correlation_id"):
                         result.correlation_id = sample.correlation_id
-                    self.writer.write(result)
+                    try:
+                        self.writer.write(result)
+                        logger.info("Response written (correlation_id=%s)", getattr(result, "correlation_id", "N/A"))
+                    except Exception:
+                        logger.exception("Exception during response serialize/write")
             await asyncio.sleep(0.001)

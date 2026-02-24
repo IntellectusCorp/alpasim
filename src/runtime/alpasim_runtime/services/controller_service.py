@@ -13,6 +13,7 @@ from alpasim_dds.types.controller import (
     RunControllerAndVehicleModelRequest,
     VDCSessionCloseRequest,
     VDCSessionRequest,
+    VehicleAndControllerParams,
 )
 from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_runtime.services.service_base import DDSServiceBase, SessionInfo, WILDCARD_SCENE_ID
@@ -87,7 +88,10 @@ class ControllerService(DDSServiceBase):
             return
 
         await self.endpoints.session_start.request(
-            VDCSessionRequest(session_uuid=session_info.uuid)
+            VDCSessionRequest(
+                session_uuid=session_info.uuid,
+                vehicle_and_controller_params=VehicleAndControllerParams(),
+            )
         )
 
     async def _cleanup_session(self, session_info: SessionInfo, **kwargs: Any) -> None:

@@ -202,21 +202,16 @@ class DDSServiceBase(ABC):
 
     endpoints_class: Type  # DriverEndpoints, ControllerEndpoints, PhysicsEndpoints
 
-    def __init__(self, address_or_participant=None, skip: bool = False, connection_timeout_s: int = 30, id: int = 0):
+    def __init__(self, address: str = "", skip: bool = False, connection_timeout_s: int = 30, id: int = 0):
         self.skip = skip
         self.id = id
         self.session_info: Optional[SessionInfo] = None
         self._available_scenes: Optional[List[str]] = None
-        if skip:
-            self.endpoints = None
+        if not skip:
+            from alpasim_dds.participant import get_participant
+            self.endpoints = self.endpoints_class(get_participant())
         else:
-            from cyclonedds.domain import DomainParticipant
-            if isinstance(address_or_participant, DomainParticipant):
-                participant = address_or_participant
-            else:
-                from alpasim_dds.participant import get_participant
-                participant = get_participant()
-            self.endpoints = self.endpoints_class(participant)
+            self.endpoints = None
 
     @property
     def name(self) -> str:
