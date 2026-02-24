@@ -668,7 +668,7 @@ class EgoDriverService:
 
     def submit_image_observation(self, request: RolloutCameraImage) -> None:
         camera_image = request.camera_image
-        image = Image.open(BytesIO(camera_image.image_bytes))
+        image = Image.open(BytesIO(bytes(camera_image.image_bytes)))
         session = self._sessions[request.session_uuid]
         if camera_image.logical_id not in session.desired_cameras_logical_ids:
             raise ValueError(f"Camera {camera_image.logical_id} not in desired cameras")
@@ -791,7 +791,7 @@ class EgoDriverService:
             "reasoning_text": reasoning_text,
         }
         debug_info = DriveResponseDebugInfo(
-            unstructured_debug_info=pickle.dumps(debug_data)
+            unstructured_debug_info=list(pickle.dumps(debug_data))
         )
         response = DriveResponse(trajectory=alpasim_traj, debug_info=debug_info)
 
