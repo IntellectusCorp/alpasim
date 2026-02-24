@@ -15,6 +15,7 @@ __pycache__/
 .serena
 .zed
 
+*.whl
 **/*.egg-info
 **/build/
 **/dist/
