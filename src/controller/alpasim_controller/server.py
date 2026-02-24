@@ -15,7 +15,7 @@ from alpasim_controller.mpc_controller import MPCImplementation
 from alpasim_controller.system_manager import SystemManager
 from alpasim_dds.endpoints.controller_server import ControllerServerEndpoints
 from alpasim_dds.participant import get_participant
-from alpasim_dds.types.common import SessionRequestStatus, VersionResponse
+from alpasim_dds.types.common import APIVersion, SessionRequestStatus, VersionResponse
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,12 @@ class VDCSimService:
 
     def get_version(self, request) -> VersionResponse:
         controller_version = importlib.metadata.version("alpasim_controller")
+        grpc_version = importlib.metadata.version("alpasim_grpc")
+        major, minor, patch = (int(v) for v in grpc_version.split("."))
         return VersionResponse(
             version_id=controller_version,
             git_hash="n/a",
+            api_version=APIVersion(major=major, minor=minor, patch=patch),
         )
 
     def start_session(self, request) -> SessionRequestStatus:

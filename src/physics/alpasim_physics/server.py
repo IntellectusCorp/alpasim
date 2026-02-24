@@ -8,8 +8,9 @@ import logging
 
 from alpasim_dds.endpoints.physics_server import PhysicsServerEndpoints
 from alpasim_dds.participant import get_participant
-from alpasim_dds.types.common import AvailableScenesResponse, VersionResponse
+from alpasim_dds.types.common import APIVersion, AvailableScenesResponse, VersionResponse
 from alpasim_dds.types.physics import PhysicsGroundIntersectionRequest, PhysicsGroundIntersectionReturn
+from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_physics import VERSION_MESSAGE
 from alpasim_physics.backend import PhysicsBackend
 from alpasim_physics.utils import aabb_dds_to_ndarray, pose_dds_to_ndarray, pose_status_to_dds
@@ -98,6 +99,11 @@ class PhysicsSimService:
         return VersionResponse(
             version_id=VERSION_MESSAGE.version_id,
             git_hash=VERSION_MESSAGE.git_hash,
+            api_version=APIVersion(
+                major=API_VERSION_MESSAGE.major,
+                minor=API_VERSION_MESSAGE.minor,
+                patch=API_VERSION_MESSAGE.patch,
+            ),
         )
 
     def shut_down(self, request) -> None:
