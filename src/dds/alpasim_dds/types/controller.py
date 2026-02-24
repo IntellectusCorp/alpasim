@@ -15,7 +15,7 @@ from alpasim_dds.types.common import DynamicState, PoseAtTime, StateAtTime, Traj
 @dataclass
 class VehicleAndControllerParams(IdlStruct):
     rig_file: str = ""
-    amend_files: sequence[str] = None
+    amend_files: sequence[str] = ()
 
 
 @dataclass
