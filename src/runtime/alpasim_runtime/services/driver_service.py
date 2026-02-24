@@ -119,7 +119,7 @@ class DriverService(DDSServiceBase):
             camera_image=CameraImage(
                 frame_start_us=image.start_timestamp_us,
                 frame_end_us=image.end_timestamp_us,
-                image_bytes=image.image_bytes,
+                image_bytes=list(image.image_bytes),
                 logical_id=image.camera_logical_id,
             ),
         )
@@ -202,7 +202,7 @@ class DriverService(DDSServiceBase):
             session_uuid=self.session_info.uuid,
             time_now_us=time_now_us,
             time_query_us=time_query_us,
-            renderer_data=renderer_data or b"",
+            renderer_data=list(renderer_data) if renderer_data else [],
         )
 
         await self.session_info.broadcaster.broadcast(

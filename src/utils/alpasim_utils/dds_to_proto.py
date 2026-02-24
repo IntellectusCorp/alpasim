@@ -95,7 +95,7 @@ def drive_request_to_proto(req: dds_ego.DriveRequest) -> proto_ego.DriveRequest:
         session_uuid=req.session_uuid,
         time_now_us=req.time_now_us,
         time_query_us=req.time_query_us,
-        renderer_data=req.renderer_data,
+        renderer_data=bytes(req.renderer_data or []),
     )
 
 
@@ -105,7 +105,7 @@ def drive_response_to_proto(resp: dds_ego.DriveResponse) -> proto_ego.DriveRespo
         proto.trajectory.CopyFrom(trajectory_to_proto(resp.trajectory))
     if resp.debug_info:
         di = proto_ego.DriveResponse.DebugInfo(
-            unstructured_debug_info=resp.debug_info.unstructured_debug_info or b"",
+            unstructured_debug_info=bytes(resp.debug_info.unstructured_debug_info or []),
         )
         if resp.debug_info.sampled_trajectories:
             for st in resp.debug_info.sampled_trajectories:
@@ -137,7 +137,7 @@ def rollout_camera_image_to_proto(
         camera_image=proto_ego.RolloutCameraImage.CameraImage(
             frame_start_us=img.camera_image.frame_start_us,
             frame_end_us=img.camera_image.frame_end_us,
-            image_bytes=img.camera_image.image_bytes,
+            image_bytes=bytes(img.camera_image.image_bytes or []),
             logical_id=img.camera_image.logical_id,
         ),
     )
