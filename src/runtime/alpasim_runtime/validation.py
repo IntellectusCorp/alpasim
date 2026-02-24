@@ -65,7 +65,7 @@ async def _probe_version_dds(
         participant, f"{svc_name}/version",
         VersionRequest, VersionResponse,
     )
-    version = await transport.request(VersionRequest(), timeout_s=timeout_s)
+    version = await transport.request(VersionRequest())
     logger.info("Connected to %s: %s (git: %s)", svc_name, version.version_id, version.git_hash)
 
 
@@ -211,7 +211,7 @@ async def _probe_scenario_compatibility_dds(
         participant, f"{svc_name}/available_scenes",
         AvailableScenesRequest, AvailableScenesResponse,
     )
-    response = await transport.request(AvailableScenesRequest(), timeout_s=timeout_s)
+    response = await transport.request(AvailableScenesRequest())
     available_scenes = set(response.scene_ids or [])
 
     for scenario in scenarios:
