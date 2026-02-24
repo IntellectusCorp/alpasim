@@ -17,6 +17,7 @@ __pycache__/
 .zed
 CLAUDE.md
 
+*.whl
 **/*.egg-info
 **/build/
 **/dist/
