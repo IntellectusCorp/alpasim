@@ -30,6 +30,8 @@ override-dependencies = [
   # hyperqueue is a vam dependency for HPC job scheduling, only available on Linux x86_64.
   # Not needed for local driver runs.
   "hyperqueue; python_version < '0'",
+  # point-cloud-utils has no aarch64 wheel, install manually from pre-built wheel
+  "point-cloud-utils; python_version < '0'",
 ]
 constraint-dependencies = [
   # setuptools 82+ removed pkg_resources, which grpcio-tools 1.62.3 still needs.
