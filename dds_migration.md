@@ -1,6 +1,4 @@
-# gRPC → DDS 마이그레이션 계획
-
-> ✅ = 구현 완료
+# gRPC → DDS 마이그레이션
 
 ## 범위
 
@@ -41,7 +39,7 @@
 
 ### 5. correlation_id
 - 양방향 통신에서 요청-응답을 매칭하기 위해 필요
-- **모든 양방향 DDS 타입에 `correlation_id: str` 필드를 추가**해야 함
+- **모든 양방향 DDS 타입에 `correlation_id: str` 필드를 추가**함
 - 기존 protobuf에는 없던 필드 (gRPC는 연결 자체가 매칭을 보장했으므로)
 - `DDSTransport.request()`가 자동으로 생성/매칭 처리
 
@@ -99,33 +97,29 @@
 
 ---
 
-## 코드 변경 계획
+## 코드 변경 사항
 
-### Phase 1: `src/dds` workspace 패키지 생성 ✅
-
-**새 workspace 멤버:** `src/dds/` ✅
-
-루트 `pyproject.toml`의 `[tool.uv.workspace].members`에 `"src/dds"` 추가. ✅
-
+### Phase 1: `src/dds` workspace 패키지 생성
+**새 workspace 멤버:** `src/dds/`
+루트 `pyproject.toml`의 `[tool.uv.workspace].members`에 `"src/dds"` 추가.
 ```
 src/dds/alpasim_dds/
-├── types/                  # DDS 네이티브 타입 정의 (proto 대체) ✅
-│   ├── common.py           # Pose, Vec3, DynamicState, Trajectory 등 ✅
-│   ├── camera.py           # CameraSpec, AvailableCamera 등 (sensorsim에서 추출) ✅
-│   ├── egodriver.py        # DriveRequest, DriveResponse 등 ✅
-│   ├── controller.py       # VDCSessionRequest 등 ✅
-│   └── physics.py          # PhysicsGroundIntersectionRequest 등 ✅
-├── endpoints/              # 서비스별 DDSTransport 인스턴스 생성 ✅
-│   ├── driver.py           # DriverEndpoints ✅
-│   ├── controller.py       # ControllerEndpoints ✅
-│   └── physics.py          # PhysicsEndpoints ✅
-├── participant.py          # DomainParticipant 싱글턴 관리 ✅
-├── transport.py            # DDSTransport (양방향/단방향 통합 클래스) ✅
-└── qos.py                  # QoS 프로필 (RELIABLE, KEEP_LAST 등) ✅
+├── types/
+│   ├── common.py        # Pose, Vec3, DynamicState, Trajectory 등
+│   ├── camera.py        # CameraSpec, AvailableCamera 등
+│   ├── egodriver.py     # DriveRequest, DriveResponse 등
+│   ├── controller.py    # VDCSessionRequest 등
+│   └── physics.py       # PhysicsGroundIntersectionRequest 등
+├── endpoints/
+│   ├── driver.py        # DriverEndpoints
+│   ├── controller.py    # ControllerEndpoints
+│   └── physics.py       # PhysicsEndpoints
+├── participant.py       # DomainParticipant 싱글턴 관리
+├── transport.py         # DDSTransport (양방향/단방향 통합)
+└── qos.py               # QoS 프로필 (RELIABLE, KEEP_LAST 등)
 ```
 
-#### DDSTransport (`transport.py`) ✅
-
+#### DDSTransport (`transport.py`)
 서비스 간 통신을 추상화하는 단일 클래스. `resp_type` 유무로 양방향/단방향이 결정됨.
 
 ```python
@@ -144,26 +138,32 @@ class DDSTransport(Generic[ReqType, RespType]):
         self.writer.write(data)
 
     async def request(self, data, timeout_s=5.0):
-        """양방향 — 보내고 응답 대기 (take() polling)"""
+        """양방향 — 보내고 응답 대기 (concurrent-safe dispatch)"""
         assert self.reader is not None, "양방향 transport가 아님 (resp_type 미지정)"
         correlation_id = str(uuid4())
         data.correlation_id = correlation_id
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self._pending[correlation_id] = future
+        if self._dispatch_task is None or self._dispatch_task.done():
+            self._dispatch_task = asyncio.ensure_future(self._dispatch_responses())
         self.writer.write(data)
-        return await self._wait_for_response(correlation_id, timeout_s)
+        try:
+            return await future
+        finally:
+            self._pending.pop(correlation_id, None)
 
-    async def _wait_for_response(self, correlation_id, timeout_s):
-        """take() polling으로 응답 대기, correlation_id 매칭"""
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
+    async def _dispatch_responses(self):
+        """take() polling으로 응답을 읽고, correlation_id로 올바른 future에 분배"""
+        while self._pending:
             for sample in self.reader.take():
-                if sample.correlation_id == correlation_id:
-                    return sample
-            await asyncio.sleep(0.001)  # 이벤트 루프 양보
-        raise TimeoutError(f"correlation_id={correlation_id} 응답 없음 ({timeout_s}s 초과)")
+                cid = getattr(sample, "correlation_id", None)
+                if cid and cid in self._pending:
+                    self._pending[cid].set_result(sample)
+            await asyncio.sleep(0.001)
 ```
 
-#### 서비스별 Endpoints 예시 (`endpoints/driver.py`) ✅
-
+#### 서비스별 Endpoints 예시 (`endpoints/driver.py`)
 ```python
 class DriverEndpoints:
     """Driver 서비스의 모든 DDSTransport를 static으로 생성"""
@@ -188,8 +188,7 @@ class DriverEndpoints:
 
 **수정 순서:** Physics → Controller → Driver (복잡도 순)
 
-#### ① `src/runtime/alpasim_runtime/services/physics_service.py` ✅
-
+#### ① `src/runtime/alpasim_runtime/services/physics_service.py`
 ```python
 # 변경 전
 class PhysicsService(ServiceBase[PhysicsServiceStub]):
@@ -206,8 +205,7 @@ class PhysicsService:
         response = await self.endpoints.ground_intersection.request(request)
 ```
 
-#### ② `src/runtime/alpasim_runtime/services/controller_service.py` ✅
-
+#### ② `src/runtime/alpasim_runtime/services/controller_service.py`
 ```python
 # 변경 전
 class ControllerService(ServiceBase[VDCServiceStub]):
@@ -223,8 +221,7 @@ class ControllerService:
         await self.endpoints.session_start.request(request)
 ```
 
-#### ③ `src/runtime/alpasim_runtime/services/driver_service.py` ✅
-
+#### ③ `src/runtime/alpasim_runtime/services/driver_service.py`
 ```python
 # 변경 전
 class DriverService(ServiceBase[EgodriverServiceStub]):
@@ -246,8 +243,7 @@ class DriverService:
         response = await self.endpoints.drive.request(request)  # 양방향
 ```
 
-### Phase 3: 서버 측 마이그레이션 ✅
-
+### Phase 3: 서버 측 마이그레이션
 서버는 클라이언트의 반대 방향으로 DDSTransport를 구성.
 클라이언트가 `req` topic에 write → 서버가 `req` topic을 read → 처리 → `resp` topic에 write.
 
@@ -279,21 +275,21 @@ class DDSServiceHandler:
 
 | 서버 | 현재 파일 | 변경 내용 |
 |------|----------|----------|
-| Driver | `src/driver/src/alpasim_driver/main.py` | gRPC servicer → DDSServiceHandler ✅ |
-| Controller | `src/controller/alpasim_controller/server.py` | gRPC servicer → DDSServiceHandler ✅ |
-| Physics | `src/physics/alpasim_physics/server.py` | gRPC servicer → DDSServiceHandler ✅ |
+| Driver | `src/driver/src/alpasim_driver/main.py` | gRPC servicer → DDSServiceHandler |
+| Controller | `src/controller/alpasim_controller/server.py` | gRPC servicer → DDSServiceHandler |
+| Physics | `src/physics/alpasim_physics/server.py` | gRPC servicer → DDSServiceHandler |
 
 #### 기타 수정 대상
 
 | 파일 | 변경 내용 |
 |------|----------|
-| `src/runtime/alpasim_runtime/validation.py` | Physics의 `get_version`, `get_available_scenes` 검증을 DDS 경유로 변경 (Sensorsim/Traffic 검증은 gRPC 유지) | ✅ |
-| `src/runtime/alpasim_runtime/simulate/__main__.py` | DDS 서비스(Driver, Controller, Physics)의 `shut_down` 호출을 DDSTransport `.send()`로 변경 (Sensorsim은 gRPC 유지) | ✅ |
+| `src/runtime/alpasim_runtime/validation.py` | Physics의 `get_version`, `get_available_scenes` 검증을 DDS 경유로 변경 (Sensorsim/Traffic 검증은 gRPC 유지) |
+| `src/runtime/alpasim_runtime/simulate/__main__.py` | DDS 서비스(Driver, Controller, Physics)의 `shut_down` 호출을 DDSTransport `.send()`로 변경 (Sensorsim은 gRPC 유지) |
 
-- LogEntry broadcasting ✅
+#### LogEntry broadcasting
 
 DDS 타입 → protobuf 타입 변환 함수를 `src/utils/alpasim_utils/dds_to_proto.py`에 구현하여 해결.
-서비스에서 DDS 통신 전후로 `LogEntry` broadcast를 복원함 (방안 1 채택).
+서비스에서 DDS 통신 전후로 `LogEntry` broadcast를 복원하였다.
 
 구현 내용:
 - `dds_to_proto.py`: 20개 변환 함수 (common, egodriver, controller, physics)
@@ -308,9 +304,11 @@ DDS 타입 → protobuf 타입 변환 함수를 `src/utils/alpasim_utils/dds_to_
 
 | 용도 | Reliability | Durability | History |
 |------|-------------|------------|---------|
-| 양방향 (drive, ground_intersection 등) | RELIABLE | VOLATILE | KEEP_LAST(1) |
-| 단방향 (submit_image 등) | RELIABLE | VOLATILE | KEEP_LAST(1) |
-| Session 시작 (start_session) | RELIABLE | TRANSIENT_LOCAL | KEEP_LAST(1) |
+| 양방향 (drive, ground_intersection 등) | RELIABLE | VOLATILE | KEEP_LAST(32) |
+| 단방향 (submit_image 등) | RELIABLE | VOLATILE | KEEP_LAST(32) |
+| Session 시작 (start_session) | RELIABLE | TRANSIENT_LOCAL | KEEP_LAST(32) |
+
+> `KEEP_LAST(32)`는 동시에 여러 요청이 발생하는 경우(physics 등)에서 메시지 유실을 방지하기 위해 설정되었다.
 
 ---
 
@@ -318,11 +316,11 @@ DDS 타입 → protobuf 타입 변환 함수를 `src/utils/alpasim_utils/dds_to_
 
 **DDS 네이티브 타입으로 새로 정의한다.**
 
-DDS는 자체 직렬화를 수행하므로, protobuf를 DDS 위에 얹는 것은 부적절하다 (이중 직렬화, DDS 기능 활용 불가). 현재 `.proto`에 정의된 메시지 타입을 DDS IDL (또는 Python `@dataclass`) 로 재정의한다.
+DDS는 자체 직렬화를 수행하므로, protobuf를 DDS 위에 얹는 것은 부적절하다 (이중 직렬화, DDS 기능 활용 불가). 기존 `.proto`에 정의된 메시지 타입을 DDS IDL (Python `@dataclass`) 로 재정의하였다.
 
 ### 타입 정의 시 추가 필드
 
-모든 양방향 타입의 request/response에 `correlation_id: str` 필드를 추가해야 함.
+모든 양방향 타입의 request/response에 `correlation_id: str` 필드를 추가함.
 기존 protobuf에는 없던 필드 (gRPC는 연결 자체가 매칭을 보장했으므로).
 
 ```python
@@ -367,36 +365,9 @@ src/grpc   → Sensorsim, Traffic용 (외부 서비스, gRPC 유지)
 src/dds    → Driver, Controller, Physics용 (내부 서비스, DDS 전환)
 ```
 
-두 패키지는 독립적. 내부 서비스의 protobuf 타입은 DDS 타입으로 대체되므로,
+두 패키지는 독립적. 내부 서비스의 protobuf 타입은 DDS 타입으로 대체되었다.
 `src/grpc`에서 해당 `.proto` 파일(egodriver, controller, physics)은 점진적으로 제거 가능.
-공통 타입(`common.proto`)은 외부 서비스가 여전히 사용하므로 유지.
-
----
-
-## 테스트 전략
-
-### 기존 테스트 인프라 활용
-
-이 레포에는 이미 3가지 테스트 패턴이 있으며, DDS 마이그레이션에 그대로 활용 가능:
-
-1. **ASL Replay** (`src/runtime/alpasim_runtime/replay_services/`)
-   - 녹화된 시뮬레이션 로그(`.asl`)를 재생하면서 요청/응답 일치 여부 검증
-   - 서비스별 replay servicer 존재: Driver, Controller, Physics, Traffic, Sensorsim
-   - DDS 전환 대상: DriverReplayService, ControllerReplayService, PhysicsReplayService
-   - gRPC 유지: SensorsimReplayService, TrafficReplayService
-
-2. **Mock 기반 테스트** (`src/runtime/tests/test_with_mocks.py`)
-   - monkeypatch로 서비스 메서드를 교체하는 패턴
-   - DDSTransport 메서드도 동일하게 mock 가능
-
-3. **직접 서비스 테스트** (`src/driver/src/alpasim_driver/tests/test_service_flow.py`)
-   - 실제 서버를 띄우고 세션 전체 흐름 테스트
-   - gRPC 서버 → DDSServiceHandler로 교체 후 동일 시나리오 검증
-
-
-### 최종: 전체 시뮬레이션 (1회)
-
-모든 서비스 마이그레이션 완료 후 실제 시뮬레이션 1회 실행하여 end-to-end 확인.
+공통 타입(`common.proto`)은 외부 서비스(Sensorsim)가 여전히 사용하므로 유지.
 
 ---
 
@@ -405,4 +376,4 @@ src/dds    → Driver, Controller, Physics용 (내부 서비스, DDS 전환)
 - 시뮬레이션 루프 흐름 (①~⑦ 순서 동일)
 - `skip` 모드 로직
 - Sensorsim / Traffic 서비스 (gRPC 유지)
-- `profiled_rpc_call()` 텔레메트리 — DDS 전환 시 제거, 필요시 DDSTransport 래퍼로 나중에 재구현
+- `profiled_rpc_call()` 텔레메트리 — DDS 전환으로 제거됨. 필요시 DDSTransport 래퍼로 재구현 가능
