@@ -1,160 +1,128 @@
-# AlpaSim: A modular, lightweight, and data-driven research simulator for autonomous driving
+# Alpasim
 
-<div align="center">
-  <img src="docs/assets/images/thumbnail.gif" alt="AlpaSim Simulation Demo" width="600">
-</div>
+## 0. 현재 setup된 Alpasim-DDS
+```bash
+# 4090, DGX 둘다 해당 디렉토리에 위치
+~/Workspace/gr/alpasim
 
-## What is AlpaSim?
+# DGX에서 driver를 먼저 실행
+cd ~/Workspace/gr/alpasim/run_driver_only
+docker compose --profile sim up driver-0
 
-AlpaSim is an open-source autonomous vehicle simulation platform designed specifically for research
-and development. It allows users to test end-to-end AV policies in a closed-loop setting by
-simulating realistic sensor data, vehicle dynamics, and traffic scenarios within a modular and
-extensible testbed.
-
-Suitable use cases include:
-
-- **Algorithm Validation**: Test new autonomous driving algorithms in realistic environments
-- **Safety Analysis**: Evaluate vehicle behavior in edge cases and challenging scenarios
-- **Performance Benchmarking/Regression Testing**: Compare different models and configurations
-- **Debugging**: Understand and debug complex autonomous driving behaviors
-
-### **Sensor Fidelity**
-
-- Neural Rendering (NuRec) integration for photorealistic sensor simulation of novel views
-- High-fidelity camera feeds with configurable field-of-view, resolution, and frame rates
-- Realistic sensor noise and environmental conditions
-
-### **Research Hackability**
-
-- Python-based implementation built for rapid prototyping and experimentation
-- Modular grpc interface design allows researchers to swap out components with custom
-  implementations
-- Extensive configuration options and debugging tools
-
-### **Horizontal Scalability**
-
-- Microservices architecture enabling distributed computing
-- Scale individual components for optimal load balancing
-- Support for multi-node deployments
-
-To learn more about the design principles and architecture, check out the
-[system design docs](docs/DESIGN.md).
-
-## Driving Policies
-
-AlpaSim currently supports the following driver policies:
-
-- [Alpamayo-R1](https://github.com/NVlabs/alpamayo) - NVIDIA Alpamayo, a VLA driving policy with
-  chain-of-causation reasoning
-- [VaVAM](https://github.com/valeoai/VideoActionModel) - an autoregressive video-action driving
-  policy
-- [Transfuser](https://github.com/autonomousvision/lead?tab=readme-ov-file#beyond-carla-cross-benchmark-deployment)
-  \- Latent TransFuser v6 ([LTFv6](<(https://huggingface.co/ln2697/tfv6_navsim)>)) policy developed
-  for [NAVSIM](https://github.com/autonomousvision/navsim) (provisional)
-
-Stay tuned for additional model support. [Contributions](#contributing) from the community are
-appreciated.
-
-## Documentation & Resources
-
-- **[Onboarding Guide](docs/ONBOARDING.md)**: Initial setup and access instructions
-- **[Tutorial](docs/TUTORIAL.md)**: Step-by-step usage guide
-- **[Operations Guide](docs/OPERATIONS.md)**: Performance tuning, configuration, and troubleshooting
-- **[Design Documentation](docs/DESIGN.md)**: Technical architecture and design decisions
-- **[API Reference](src/grpc/)**: gRPC API documentation
-
-### **Sample Data**
-
-- **Hugging Face Dataset**:
-  [PhysicalAI-Autonomous-Vehicles-NuRec](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec)
-- **Sample Artifacts**: Included in the repository via Git LFS
-
-## Contributing
-
-We welcome contributions from the research community! Please see our
-[Contributing Guide](CONTRIBUTING.md) for details on:
-
-- Code style and conventions
-- Testing requirements
-- Pull request process
-- Development setup
-
-## License
-
-This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
-
-## Citation
-
-If you use this software, please cite it as follows:
-
-```
-@software{alpasim_2025,
-  author       = {
-    NVIDIA and
-    Yulong Cao and
-    Riccardo de Lutio and
-    Sanja Fidler and
-    Guillermo Garcia Cobo and
-    Zan Gojcic and
-    Maximilian Igl and
-    Boris Ivanovic and
-    Peter Karkus and
-    Janick Martinez Esturo and
-    Marco Pavone and
-    Aaron Smith and
-    Ellie Tanimura and
-    Michal Tyszkiewicz and
-    Michael Watson and
-    Qi Wu and
-    Le Zhang
-  },
-  title        = {AlpaSim: A Modular, Lightweight, and Data-Driven Research Simulator for Autonomous Driving},
-  year         = {2025},
-  month        = {October},
-  url          = {https://github.com/NVlabs/alpasim},
-}
+# 이후 4090에서 sim 실행
+cd ~/Workspace/gr/alpasim/run_distributed
+docker compose --profile sim up runtime-0 controller-0 physics-0 sensorsim-0
 ```
 
-## Project Contributors:
+시뮬레이션 결과는 `~/Workspace/gr/alpasim/run_distributed/rollouts/clipgt-{scene_id}/{rollout_id}/` 하위에 저장된다.
 
-Contributors in each topic in alphabetical order
+```
+run_distributed/rollouts/
+└── clipgt-{scene_id}/
+    └── {rollout_id}/
+        ├── rollout.asl                          # ASL 로그
+        ├── metrics.parquet                      # 메트릭 데이터
+        └── *_reasoning_overlay.mp4              # REASONING_OVERLAY 비디오
+```
 
-**Project Lead:** Maximilian Igl
+아래는 초기 setup 과정이다. 위 환경에서 이미 setup이 완료되었으므로 위의 환경에서 진행한다면 아래 과정을 거치지 않아도 된다.
 
-**Tech Leads:** Michal Tyszkiewicz, Michael Watson
+<br>
 
-**Architecture Design & Networking:** Michal Tyszkiewicz
+## 1. Alpasim 서버 설정 (4090, x86_64)
 
-**Open Sourcing:** Guillermo Garcia Cobo, Maximilian Igl, Peter Karkus, Ellie Tanimura, Michael
-Watson
+```bash
+git clone https://github.com/IntellectusCorp/alpasim.git
+cd alpasim  # $ALPASIM_WORKDIR
 
-**Infrastructure & Wizard:** Maximilian Igl, Aaron Smith, Michal Tyszkiewicz, Michael Watson, Qi Wu
-(SLURM deployment), Le Zhang (Data management)
+# main 브랜치 사용 (기본)
 
-**Runtime:** Maximilian Igl, Aaron Smith, Ellie Tanimura, Michal Tyszkiewicz, Michael Watson
+# alpasim_wizard 사용 전 local env setup
+source setup_local_env.sh
 
-**CICD:** Maximilian Igl, Aaron Smith
+# Wizard로 설정 생성
+uv run alpasim_wizard +deploy=local \
+    wizard.log_dir=$PWD/run_distributed \
+    wizard.run_method=NONE \
+    wizard.debug_flags.use_localhost=True \
+    driver=[ar1,ar1_runtime_configs]
+```
 
-**Data Pipeline:** Riccardo de Lutio, Janick Martinez, Le Zhang
+설정 파일이 자동으로 생성된다.
 
-**Product Manager:** Matt Cragun
+<br>
 
-**Testing & debugging:** Guillermo Garcia Cobo, Peter Karkus, Ellie Tanimura
+## 2. Alpamayo 드라이버 서버 설정 (Dell Pro Max GB10, ARM)
 
-**Service Modules:**
+```bash
+git clone https://github.com/IntellectusCorp/alpasim.git
+cd alpasim  # $ALPASIM_WORKDIR
 
-- Driver integration: Maximilian Igl, Peter Karkus, Michal Tyszkiewicz
-- Evaluation: Yulong Cao, Maximilian Igl
-- Controller: Michael Watson
-- Physics: Riccardo de Lutio
-- Trafficsim: Maximilian Igl, Boris Ivanovic
+# aarch 브랜치로 전환 (ARM 빌드용)
+git checkout aarch
+```
 
-**Senior Mgmt:** Sanja Fidler, Zan Gojcic, Boris Ivanovic, Marco Pavone
+<br>
 
-**Acknowledgements for additional contributions:** Fabian Barajas, Kashyap Chitta, Ankit Gupta,
-Laura Leal-Taixe, Nicole Yang
+### ARM용 wheel 설치
 
-<div align="center">
-  <strong>Built for researchers, by researchers</strong><br>
-  <em>Accelerating autonomous vehicle development through realistic simulation</em>
-</div>
+`point_cloud_utils`는 ARM용 PyPI wheel이 없으므로, 사전 빌드된 wheel을 프로젝트 루트에서 설치해야 한다.
+Alpasim 4090 서버(x86_64)의 원본 프로젝트에 wheel 파일이 포함되어 있다.
+이 wheel은 `aarch` 브랜치의 `pyproject.toml` 또는 `Dockerfile`에서 자동 참조된다.
+
+```bash
+scp 192.168.0.5:~/Workspace/alpasim/point_cloud_utils-0.35.0-cp312-cp312-linux_aarch64.whl .
+```
+
+<br>
+
+### 설정파일 생성
+
+```bash
+uv run alpasim_wizard +deploy=local \
+    wizard.log_dir=$PWD/run_driver_only \
+    wizard.run_method=NONE \
+    wizard.debug_flags.use_localhost=True \
+    driver=[ar1,ar1_runtime_configs]
+```
+
+`run_driver_only/driver-config.yaml` 주요 설정:
+- Alpasim 서버의 `run_distributed/driver-config.yaml`과 **use_cameras 설정이 동일**해야 함
+
+```yaml
+inference:
+  context_length: 4
+  max_batch_size: 1
+  subsample_factor: 1
+  use_cameras:
+    - camera_cross_left_120fov
+    - camera_front_wide_120fov
+    - camera_cross_right_120fov
+    - camera_front_tele_30fov
+```
+
+<br>
+
+## 3. 시뮬레이션 실행
+
+Docker Compose를 사용하며, 이미지가 빌드되어 있지 않으면 자동으로 빌드 후 시작한다.
+이미지 태그는 docker-compose.yaml에서 직접 설정한다.
+
+### 실행 순서 (반드시 드라이버 먼저)
+
+**Step 1) GB10에서 Alpamayo 드라이버 실행:**
+
+```bash
+cd $ALPASIM_WORKDIR/run_driver_only
+docker compose --profile sim up driver-0
+```
+
+**Step 2) 4090에서 Alpasim 시뮬레이션 실행:**
+
+```bash
+cd $ALPASIM_WORKDIR/run_distributed
+docker compose --profile sim up runtime-0 controller-0 physics-0 sensorsim-0
+```
+
+평가(eval)와 aggregation은 runtime-0이 종료될 때 자동으로 실행된다.
+
