@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from cyclonedds.idl import IdlStruct
 from cyclonedds.idl.types import int64, uint64, sequence
@@ -22,7 +22,7 @@ class VehicleAndControllerParams(IdlStruct):
 class VDCSessionRequest(IdlStruct):
     correlation_id: str = ""
     session_uuid: str = ""
-    vehicle_and_controller_params: VehicleAndControllerParams = None
+    vehicle_and_controller_params: VehicleAndControllerParams = field(default_factory=VehicleAndControllerParams)
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +44,8 @@ class VDCSessionCloseRequest(IdlStruct):
 class RunControllerAndVehicleModelRequest(IdlStruct):
     correlation_id: str = ""
     session_uuid: str = ""
-    state: StateAtTime = None
-    planned_trajectory_in_rig: Trajectory = None
+    state: StateAtTime = field(default_factory=StateAtTime)
+    planned_trajectory_in_rig: Trajectory = field(default_factory=Trajectory)
     future_time_us: int64 = 0
     coerce_dynamic_state: bool = False
 
@@ -53,7 +53,7 @@ class RunControllerAndVehicleModelRequest(IdlStruct):
 @dataclass
 class RunControllerAndVehicleModelResponse(IdlStruct):
     correlation_id: str = ""
-    pose_local_to_rig: PoseAtTime = None
-    pose_local_to_rig_estimated: PoseAtTime = None
-    dynamic_state: DynamicState = None
-    dynamic_state_estimated: DynamicState = None
+    pose_local_to_rig: PoseAtTime = field(default_factory=PoseAtTime)
+    pose_local_to_rig_estimated: PoseAtTime = field(default_factory=PoseAtTime)
+    dynamic_state: DynamicState = field(default_factory=DynamicState)
+    dynamic_state_estimated: DynamicState = field(default_factory=DynamicState)

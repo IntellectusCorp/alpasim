@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from cyclonedds.idl import IdlStruct
 from cyclonedds.idl.types import float32, uint32, uint64, sequence
@@ -26,16 +26,16 @@ class Vec3(IdlStruct):
 
 @dataclass
 class Pose(IdlStruct):
-    vec: Vec3 = None
-    quat: Quat = None
+    vec: Vec3 = field(default_factory=Vec3)
+    quat: Quat = field(default_factory=Quat)
 
 
 @dataclass
 class DynamicState(IdlStruct):
-    angular_velocity: Vec3 = None
-    linear_velocity: Vec3 = None
-    linear_acceleration: Vec3 = None
-    angular_acceleration: Vec3 = None
+    angular_velocity: Vec3 = field(default_factory=Vec3)
+    linear_velocity: Vec3 = field(default_factory=Vec3)
+    linear_acceleration: Vec3 = field(default_factory=Vec3)
+    angular_acceleration: Vec3 = field(default_factory=Vec3)
 
 
 @dataclass
@@ -47,15 +47,15 @@ class AABB(IdlStruct):
 
 @dataclass
 class PoseAtTime(IdlStruct):
-    pose: Pose = None
+    pose: Pose = field(default_factory=Pose)
     timestamp_us: uint64 = 0
 
 
 @dataclass
 class StateAtTime(IdlStruct):
     timestamp_us: uint64 = 0
-    pose: Pose = None
-    state: DynamicState = None
+    pose: Pose = field(default_factory=Pose)
+    state: DynamicState = field(default_factory=DynamicState)
 
 
 @dataclass
@@ -86,7 +86,7 @@ class VersionResponse(IdlStruct):
     correlation_id: str = ""
     version_id: str = ""
     git_hash: str = ""
-    api_version: APIVersion = None
+    api_version: APIVersion = field(default_factory=APIVersion)
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ Sensorsim itself stays on gRPC, but DriveSessionRequest embeds camera
 definitions so we need these as DDS-serialisable structs.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from cyclonedds.idl import IdlEnum, IdlStruct
 from cyclonedds.idl.types import float64, uint32, sequence
 
@@ -51,7 +51,7 @@ class FthetaCameraParam(IdlStruct):
     pixeldist_to_angle_poly: sequence[float64] = ()
     angle_to_pixeldist_poly: sequence[float64] = ()
     max_angle: float64 = 0.0
-    linear_cde: LinearCde = None
+    linear_cde: LinearCde = field(default_factory=LinearCde)
 
 
 @dataclass
@@ -90,24 +90,24 @@ class BivariateWindshieldModelParameters(IdlStruct):
 
 
 # ---------------------------------------------------------------------------
-# CameraSpec  (proto uses oneof — DDS has no union, so we use Optional fields)
+# CameraSpec  (proto uses oneof — DDS has no union, so we use default instances)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class CameraSpec(IdlStruct):
     # Exactly one of the three camera params should be set.
-    # DDS has no oneof; we use Optional-style with None defaults.
-    ftheta_param: FthetaCameraParam = None
-    opencv_pinhole_param: OpenCVPinholeCameraParam = None
-    opencv_fisheye_param: OpenCVFisheyeCameraParam = None
+    # DDS has no oneof; all get default instances to avoid serialize failures.
+    ftheta_param: FthetaCameraParam = field(default_factory=FthetaCameraParam)
+    opencv_pinhole_param: OpenCVPinholeCameraParam = field(default_factory=OpenCVPinholeCameraParam)
+    opencv_fisheye_param: OpenCVFisheyeCameraParam = field(default_factory=OpenCVFisheyeCameraParam)
 
     logical_id: str = ""
     resolution_h: uint32 = 0
     resolution_w: uint32 = 0
     shutter_type: ShutterType = ShutterType.UNKNOWN
 
-    bivariate_windshield_model_param: BivariateWindshieldModelParameters = None
+    bivariate_windshield_model_param: BivariateWindshieldModelParameters = field(default_factory=BivariateWindshieldModelParameters)
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +117,6 @@ class CameraSpec(IdlStruct):
 
 @dataclass
 class AvailableCamera(IdlStruct):
-    intrinsics: CameraSpec = None
-    rig_to_camera: Pose = None
+    intrinsics: CameraSpec = field(default_factory=CameraSpec)
+    rig_to_camera: Pose = field(default_factory=Pose)
     logical_id: str = ""
