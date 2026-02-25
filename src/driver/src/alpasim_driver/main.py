@@ -668,7 +668,7 @@ class EgoDriverService:
         )
 
     def submit_image_observation(self, request: RolloutCameraImage) -> None:
-        logger.info(
+        logger.debug(
             "submit_image_observation called: session=%s, logical_id=%s",
             request.session_uuid,
             request.camera_image.logical_id,
@@ -694,7 +694,7 @@ class EgoDriverService:
         )
 
     def submit_egomotion_observation(self, request: RolloutEgoTrajectory) -> None:
-        logger.info(
+        logger.debug(
             "submit_egomotion_observation called: session=%s",
             request.session_uuid,
         )
@@ -716,7 +716,7 @@ class EgoDriverService:
             session.add_dynamic_state(latest_timestamp_us, request.dynamic_state)
 
     def submit_route(self, request: RouteRequest) -> None:
-        logger.info(
+        logger.debug(
             "submit_route called: session=%s, waypoint_count=%s",
             request.session_uuid,
             len(request.route.waypoints),
@@ -742,7 +742,7 @@ class EgoDriverService:
         return session.all_cameras_ready()
 
     async def drive(self, request: DriveRequest) -> DriveResponse:
-        logger.info(
+        logger.debug(
             "drive called: session=%s, time_now_us=%s",
             request.session_uuid,
             request.time_now_us,
@@ -814,7 +814,7 @@ class EgoDriverService:
         )
         response = DriveResponse(trajectory=alpasim_traj, debug_info=debug_info)
 
-        logger.info(
+        logger.debug(
             "drive returning response: session=%s, time_now_us=%s, trajectory_points=%d",
             request.session_uuid,
             request.time_now_us,
