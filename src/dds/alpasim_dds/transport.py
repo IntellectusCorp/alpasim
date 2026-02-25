@@ -52,10 +52,10 @@ class DDSTransport:
             self._dispatch_task = asyncio.ensure_future(self._dispatch_responses())
 
         self.writer.write(data)
-        logger.info("[%s] Request sent (correlation_id=%s, pending=%d)", self.name, correlation_id, len(self._pending))
+        logger.debug("[%s] Request sent (correlation_id=%s, pending=%d)", self.name, correlation_id, len(self._pending))
         try:
             result = await future
-            logger.info("[%s] Response received (correlation_id=%s)", self.name, correlation_id)
+            logger.debug("[%s] Response received (correlation_id=%s)", self.name, correlation_id)
             return result
         finally:
             self._pending.pop(correlation_id, None)
@@ -68,10 +68,10 @@ class DDSTransport:
                     continue
                 cid = getattr(sample, "correlation_id", None)
                 if cid and cid in self._pending:
-                    logger.info("[%s] Dispatching response (correlation_id=%s, remaining=%d)", self.name, cid, len(self._pending) - 1)
+                    logger.debug("[%s] Dispatching response (correlation_id=%s, remaining=%d)", self.name, cid, len(self._pending) - 1)
                     self._pending[cid].set_result(sample)
                 else:
-                    logger.info("[%s] Unmatched response (correlation_id=%s)", self.name, cid)
+                    logger.debug("[%s] Unmatched response (correlation_id=%s)", self.name, cid)
             await asyncio.sleep(0.001)
 
 
@@ -104,7 +104,7 @@ class DDSServerTransport:
         while stop_event is None or not stop_event.is_set():
             for sample in self.reader.take():
                 if type(sample).__name__ == "InvalidSample":
-                    logger.info("[%s] Skipping InvalidSample", self.name)
+                    logger.debug("[%s] Skipping InvalidSample", self.name)
                     continue
                 try:
                     if inspect.iscoroutinefunction(handler):
@@ -119,7 +119,7 @@ class DDSServerTransport:
                         result.correlation_id = sample.correlation_id
                     try:
                         self.writer.write(result)
-                        logger.info("[%s] Response written (correlation_id=%s)", self.name, getattr(result, "correlation_id", "N/A"))
+                        logger.debug("[%s] Response written (correlation_id=%s)", self.name, getattr(result, "correlation_id", "N/A"))
                     except Exception:
                         logger.exception("[%s] Exception during response serialize/write", self.name)
             await asyncio.sleep(0.001)
