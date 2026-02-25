@@ -16,7 +16,7 @@ from alpasim_dds.types.camera import AvailableCamera
 
 @dataclass
 class VehicleDefinition(IdlStruct):
-    available_cameras: sequence[AvailableCamera] = None
+    available_cameras: sequence[AvailableCamera] = ()
 
 
 @dataclass
@@ -57,7 +57,7 @@ class DriveSessionCloseRequest(IdlStruct):
 class CameraImage(IdlStruct):
     frame_start_us: uint64 = 0
     frame_end_us: uint64 = 0
-    image_bytes: sequence[uint8] = None
+    image_bytes: sequence[uint8] = ()
     logical_id: str = ""
 
 
@@ -87,7 +87,7 @@ class RolloutEgoTrajectory(IdlStruct):
 @dataclass
 class Route(IdlStruct):
     timestamp_us: uint64 = 0
-    waypoints: sequence[Vec3] = None
+    waypoints: sequence[Vec3] = ()
 
 
 @dataclass
@@ -124,13 +124,13 @@ class DriveRequest(IdlStruct):
     session_uuid: str = ""
     time_now_us: uint64 = 0
     time_query_us: uint64 = 0
-    renderer_data: sequence[uint8] = None
+    renderer_data: sequence[uint8] = ()
 
 
 @dataclass
 class DriveResponseDebugInfo(IdlStruct):
     unstructured_debug_info: sequence[uint8] = ()
-    sampled_trajectories: sequence[Trajectory] = None
+    sampled_trajectories: sequence[Trajectory] = ()
 
 
 @dataclass
