@@ -423,7 +423,7 @@ class AR1Model(BaseTrajectoryModel):
         # Log reasoning trace if available
         if "cot" in extra and len(extra["cot"]) > 0:
             reasoning_text = str(extra["cot"][0, 0])
-            logger.info("AR1 Chain-of-Causation: %s", reasoning_text)
+            logger.debug("AR1 Chain-of-Causation: %s", reasoning_text)
         else:
             reasoning_text = None
 
