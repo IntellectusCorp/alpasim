@@ -21,6 +21,7 @@ class DDSTransport:
     """
 
     def __init__(self, participant, name, req_type, resp_type=None, qos=RELIABLE_QOS):
+        self.name = name
         self.writer = DataWriter(
             participant, Topic(participant, f"{name}/req", req_type), qos=qos
         )
@@ -30,27 +31,47 @@ class DDSTransport:
             )
         else:
             self.reader = None
+        self._pending: dict[str, asyncio.Future] = {}
+        self._dispatch_task: asyncio.Task | None = None
 
     def send(self, data):
         """단방향 — 보내고 끝 (fire-and-forget)."""
         self.writer.write(data)
 
     async def request(self, data):
-        """양방향 — 보내고 응답 무한 대기 (take() polling)."""
+        """양방향 — 보내고 응답 대기 (concurrent-safe)."""
         assert self.reader is not None, "양방향 transport가 아님 (resp_type 미지정)"
         correlation_id = str(uuid4())
         data.correlation_id = correlation_id
-        self.writer.write(data)
-        return await self._wait_for_response(correlation_id)
 
-    async def _wait_for_response(self, correlation_id):
-        while True:
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self._pending[correlation_id] = future
+
+        if self._dispatch_task is None or self._dispatch_task.done():
+            self._dispatch_task = asyncio.ensure_future(self._dispatch_responses())
+
+        self.writer.write(data)
+        logger.info("[%s] Request sent (correlation_id=%s, pending=%d)", self.name, correlation_id, len(self._pending))
+        try:
+            result = await future
+            logger.info("[%s] Response received (correlation_id=%s)", self.name, correlation_id)
+            return result
+        finally:
+            self._pending.pop(correlation_id, None)
+
+    async def _dispatch_responses(self):
+        """reader에서 샘플을 읽어 pending future에 분배."""
+        while self._pending:
             for sample in self.reader.take():
                 if type(sample).__name__ == "InvalidSample":
-                    logger.info("Skipping InvalidSample in _wait_for_response")
                     continue
-                if sample.correlation_id == correlation_id:
-                    return sample
+                cid = getattr(sample, "correlation_id", None)
+                if cid and cid in self._pending:
+                    logger.info("[%s] Dispatching response (correlation_id=%s, remaining=%d)", self.name, cid, len(self._pending) - 1)
+                    self._pending[cid].set_result(sample)
+                else:
+                    logger.info("[%s] Unmatched response (correlation_id=%s)", self.name, cid)
             await asyncio.sleep(0.001)
 
 
@@ -63,6 +84,7 @@ class DDSServerTransport:
     """
 
     def __init__(self, participant, name, req_type, resp_type=None, qos=RELIABLE_QOS):
+        self.name = name
         self.reader = DataReader(
             participant, Topic(participant, f"{name}/req", req_type), qos=qos
         )
@@ -82,7 +104,7 @@ class DDSServerTransport:
         while stop_event is None or not stop_event.is_set():
             for sample in self.reader.take():
                 if type(sample).__name__ == "InvalidSample":
-                    logger.info("Skipping InvalidSample")
+                    logger.info("[%s] Skipping InvalidSample", self.name)
                     continue
                 try:
                     if inspect.iscoroutinefunction(handler):
@@ -90,14 +112,14 @@ class DDSServerTransport:
                     else:
                         result = handler(sample)
                 except Exception:
-                    logger.exception("Exception during handler execution")
+                    logger.exception("[%s] Exception during handler execution", self.name)
                     continue
                 if self.writer is not None and result is not None:
                     if hasattr(sample, "correlation_id"):
                         result.correlation_id = sample.correlation_id
                     try:
                         self.writer.write(result)
-                        logger.info("Response written (correlation_id=%s)", getattr(result, "correlation_id", "N/A"))
+                        logger.info("[%s] Response written (correlation_id=%s)", self.name, getattr(result, "correlation_id", "N/A"))
                     except Exception:
-                        logger.exception("Exception during response serialize/write")
+                        logger.exception("[%s] Exception during response serialize/write", self.name)
             await asyncio.sleep(0.001)

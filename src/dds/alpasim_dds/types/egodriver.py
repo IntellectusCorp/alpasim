@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from cyclonedds.idl import IdlStruct
@@ -21,7 +21,7 @@ class VehicleDefinition(IdlStruct):
 
 @dataclass
 class RolloutSpec(IdlStruct):
-    vehicle: VehicleDefinition = None
+    vehicle: VehicleDefinition = field(default_factory=VehicleDefinition)
 
 
 @dataclass
@@ -34,8 +34,8 @@ class DriveSessionRequest(IdlStruct):
     correlation_id: str = ""
     session_uuid: str = ""
     random_seed: uint64 = 0
-    debug_info: DebugInfo = None        # optional in proto
-    rollout_spec: RolloutSpec = None
+    debug_info: DebugInfo = field(default_factory=DebugInfo)
+    rollout_spec: RolloutSpec = field(default_factory=RolloutSpec)
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ class CameraImage(IdlStruct):
 @dataclass
 class RolloutCameraImage(IdlStruct):
     session_uuid: str = ""
-    camera_image: CameraImage = None
+    camera_image: CameraImage = field(default_factory=CameraImage)
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +75,8 @@ class RolloutCameraImage(IdlStruct):
 @dataclass
 class RolloutEgoTrajectory(IdlStruct):
     session_uuid: str = ""
-    trajectory: Trajectory = None
-    dynamic_state: DynamicState = None
+    trajectory: Trajectory = field(default_factory=Trajectory)
+    dynamic_state: DynamicState = field(default_factory=DynamicState)
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +93,7 @@ class Route(IdlStruct):
 @dataclass
 class RouteRequest(IdlStruct):
     session_uuid: str = ""
-    route: Route = None
+    route: Route = field(default_factory=Route)
 
 
 # ---------------------------------------------------------------------------
@@ -104,13 +104,13 @@ class RouteRequest(IdlStruct):
 @dataclass
 class GroundTruth(IdlStruct):
     timestamp_us: uint64 = 0
-    trajectory: Trajectory = None
+    trajectory: Trajectory = field(default_factory=Trajectory)
 
 
 @dataclass
 class GroundTruthRequest(IdlStruct):
     session_uuid: str = ""
-    ground_truth: GroundTruth = None
+    ground_truth: GroundTruth = field(default_factory=GroundTruth)
 
 
 # ---------------------------------------------------------------------------
@@ -136,5 +136,5 @@ class DriveResponseDebugInfo(IdlStruct):
 @dataclass
 class DriveResponse(IdlStruct):
     correlation_id: str = ""
-    trajectory: Trajectory = None
-    debug_info: DriveResponseDebugInfo = None
+    trajectory: Trajectory = field(default_factory=Trajectory)
+    debug_info: DriveResponseDebugInfo = field(default_factory=DriveResponseDebugInfo)
