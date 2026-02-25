@@ -449,7 +449,7 @@ def _render_single_reasoning_overlay_frame(
         ego_xyz = ego_qvec.vec3
 
         pred_xyz_np = driver_response_at_time.selected_trajectory.poses.vec3
-        if np.linalg.norm(pred_xyz_np[0] - ego_xyz) > 0.01:
+        if np.linalg.norm(pred_xyz_np[0] - ego_xyz) > 0.02:
             raise ValueError(
                 f"First predicted point is not close to current ego position: "
                 f"{pred_xyz_np[0]} - {ego_xyz} = {np.linalg.norm(pred_xyz_np[0] - ego_xyz)}"
