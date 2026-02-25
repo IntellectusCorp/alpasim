@@ -7,7 +7,7 @@ import functools
 import logging
 
 from alpasim_dds.endpoints.physics_server import PhysicsServerEndpoints
-from alpasim_dds.participant import get_participant
+from alpasim_dds.participant import DEFAULT_DOMAIN_ID, get_participant
 from alpasim_dds.types.common import APIVersion, AvailableScenesResponse, VersionResponse
 from alpasim_dds.types.physics import PhysicsGroundIntersectionRequest, PhysicsGroundIntersectionReturn
 from alpasim_grpc import API_VERSION_MESSAGE
@@ -158,7 +158,7 @@ def parse_args(
     parser.add_argument(
         "--domain-id",
         type=int,
-        default=0,
+        default=DEFAULT_DOMAIN_ID,
         help="DDS domain ID",
     )
     args, overrides = parser.parse_known_args(arg_list)
