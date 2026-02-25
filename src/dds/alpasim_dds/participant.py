@@ -1,6 +1,6 @@
 from cyclonedds.domain import DomainParticipant
 
-DEFAULT_DOMAIN_ID = 77
+DEFAULT_DOMAIN_ID = 3
 
 _participant: DomainParticipant | None = None
 
