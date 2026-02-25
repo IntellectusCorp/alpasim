@@ -36,11 +36,7 @@ class PhysicsGroundIntersectionRequest(IdlStruct):
     scene_id: str = ""
     now_us: uint64 = 0
     future_us: uint64 = 0
-<<<<<<< HEAD
-    ego_data: EgoData = None            # optional in proto
-=======
     ego_data: EgoData = field(default_factory=EgoData)
->>>>>>> main
     other_objects: sequence[OtherObject] = ()
 
 
