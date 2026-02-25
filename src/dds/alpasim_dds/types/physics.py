@@ -37,7 +37,7 @@ class PhysicsGroundIntersectionRequest(IdlStruct):
     now_us: uint64 = 0
     future_us: uint64 = 0
     ego_data: EgoData = None            # optional in proto
-    other_objects: sequence[OtherObject] = None
+    other_objects: sequence[OtherObject] = ()
 
 
 class GroundIntersectionStatus(IdlEnum):
@@ -57,4 +57,4 @@ class ReturnPose(IdlStruct):
 class PhysicsGroundIntersectionReturn(IdlStruct):
     correlation_id: str = ""
     ego_pose: ReturnPose = None         # optional in proto
-    other_poses: sequence[ReturnPose] = None
+    other_poses: sequence[ReturnPose] = ()

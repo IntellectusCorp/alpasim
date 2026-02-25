@@ -668,6 +668,11 @@ class EgoDriverService:
         )
 
     def submit_image_observation(self, request: RolloutCameraImage) -> None:
+        logger.info(
+            "submit_image_observation called: session=%s, logical_id=%s",
+            request.session_uuid,
+            request.camera_image.logical_id,
+        )
         camera_image = request.camera_image
         image = Image.open(BytesIO(camera_image.image_bytes))
         session = self._sessions[request.session_uuid]
@@ -689,6 +694,10 @@ class EgoDriverService:
         )
 
     def submit_egomotion_observation(self, request: RolloutEgoTrajectory) -> None:
+        logger.info(
+            "submit_egomotion_observation called: session=%s",
+            request.session_uuid,
+        )
         session = self._sessions[request.session_uuid]
 
         if len(request.trajectory.poses) != 1:
@@ -707,7 +716,11 @@ class EgoDriverService:
             session.add_dynamic_state(latest_timestamp_us, request.dynamic_state)
 
     def submit_route(self, request: RouteRequest) -> None:
-        logger.debug("submit_route: waypoint count=%s", len(request.route.waypoints))
+        logger.info(
+            "submit_route called: session=%s, waypoint_count=%s",
+            request.session_uuid,
+            len(request.route.waypoints),
+        )
         if self._cfg.route is not None:
             self._sessions[request.session_uuid].update_command_from_route(
                 request.route,
@@ -729,13 +742,18 @@ class EgoDriverService:
         return session.all_cameras_ready()
 
     async def drive(self, request: DriveRequest) -> DriveResponse:
+        logger.info(
+            "drive called: session=%s, time_now_us=%s",
+            request.session_uuid,
+            request.time_now_us,
+        )
         if request.session_uuid not in self._sessions:
             raise KeyError(f"Session {request.session_uuid} not found")
 
         session = self._sessions[request.session_uuid]
 
         if not self._check_frames_ready(session):
-            empty_traj = Trajectory()
+            empty_traj = Trajectory(poses=[])
             min_required = next(
                 iter(session.frame_caches.values())
             ).min_frames_required()
@@ -748,18 +766,18 @@ class EgoDriverService:
                 self._context_length,
                 self._cfg.inference.subsample_factor,
             )
-            return DriveResponse(trajectory=empty_traj)
+            return DriveResponse(trajectory=empty_traj, debug_info=DriveResponseDebugInfo())
 
         pose_snapshot = session.poses[-1] if session.poses else None
         logger.debug(f"pose_snapshot: {pose_snapshot}")
         if pose_snapshot is None:
-            empty_traj = Trajectory()
+            empty_traj = Trajectory(poses=[])
             logger.debug(
                 "Drive request received with no pose snapshot available "
                 "(poses list length: %s). Returning empty trajectory",
                 len(session.poses),
             )
-            return DriveResponse(trajectory=empty_traj)
+            return DriveResponse(trajectory=empty_traj, debug_info=DriveResponseDebugInfo())
 
         future: asyncio.Future[ModelPrediction] = self._loop.create_future()
         job = DriveJob(
@@ -796,7 +814,12 @@ class EgoDriverService:
         )
         response = DriveResponse(trajectory=alpasim_traj, debug_info=debug_info)
 
-        logger.debug("Returning drive response at time %s", request.time_now_us)
+        logger.info(
+            "drive returning response: session=%s, time_now_us=%s, trajectory_points=%d",
+            request.session_uuid,
+            request.time_now_us,
+            len(alpasim_traj.poses),
+        )
         return response
 
     def _convert_prediction_to_alpasim_trajectory(

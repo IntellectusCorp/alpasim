@@ -60,7 +60,7 @@ class StateAtTime(IdlStruct):
 
 @dataclass
 class Trajectory(IdlStruct):
-    poses: sequence[PoseAtTime] = None
+    poses: sequence[PoseAtTime] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ class AvailableScenesRequest(IdlStruct):
 @dataclass
 class AvailableScenesResponse(IdlStruct):
     correlation_id: str = ""
-    scene_ids: sequence[str] = None
+    scene_ids: sequence[str] = ()
 
 
 # ---------------------------------------------------------------------------

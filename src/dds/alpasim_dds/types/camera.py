@@ -48,8 +48,8 @@ class FthetaCameraParam(IdlStruct):
     principal_point_x: float64 = 0.0
     principal_point_y: float64 = 0.0
     reference_poly: FthetaPolynomialType = FthetaPolynomialType.UNKNOWN
-    pixeldist_to_angle_poly: sequence[float64] = None
-    angle_to_pixeldist_poly: sequence[float64] = None
+    pixeldist_to_angle_poly: sequence[float64] = ()
+    angle_to_pixeldist_poly: sequence[float64] = ()
     max_angle: float64 = 0.0
     linear_cde: LinearCde = None
 
@@ -60,9 +60,9 @@ class OpenCVPinholeCameraParam(IdlStruct):
     principal_point_y: float64 = 0.0
     focal_length_x: float64 = 0.0
     focal_length_y: float64 = 0.0
-    radial_coeffs: sequence[float64] = None
-    tangential_coeffs: sequence[float64] = None
-    thin_prism_coeffs: sequence[float64] = None
+    radial_coeffs: sequence[float64] = ()
+    tangential_coeffs: sequence[float64] = ()
+    thin_prism_coeffs: sequence[float64] = ()
 
 
 @dataclass
@@ -71,7 +71,7 @@ class OpenCVFisheyeCameraParam(IdlStruct):
     principal_point_y: float64 = 0.0
     focal_length_x: float64 = 0.0
     focal_length_y: float64 = 0.0
-    radial_coeffs: sequence[float64] = None
+    radial_coeffs: sequence[float64] = ()
     max_angle: float64 = 0.0
 
 
@@ -83,10 +83,10 @@ class BivariateReferencePolynomial(IdlEnum):
 @dataclass
 class BivariateWindshieldModelParameters(IdlStruct):
     reference_poly: BivariateReferencePolynomial = BivariateReferencePolynomial.FORWARD
-    horizontal_poly: sequence[float64] = None
-    vertical_poly: sequence[float64] = None
-    horizontal_poly_inverse: sequence[float64] = None
-    vertical_poly_inverse: sequence[float64] = None
+    horizontal_poly: sequence[float64] = ()
+    vertical_poly: sequence[float64] = ()
+    horizontal_poly_inverse: sequence[float64] = ()
+    vertical_poly_inverse: sequence[float64] = ()
 
 
 # ---------------------------------------------------------------------------
