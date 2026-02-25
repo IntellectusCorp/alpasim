@@ -14,7 +14,7 @@ from threading import Lock
 from alpasim_controller.mpc_controller import MPCImplementation
 from alpasim_controller.system_manager import SystemManager
 from alpasim_dds.endpoints.controller_server import ControllerServerEndpoints
-from alpasim_dds.participant import get_participant
+from alpasim_dds.participant import DEFAULT_DOMAIN_ID, get_participant
 from alpasim_dds.types.common import APIVersion, SessionRequestStatus, VersionResponse
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ def main() -> None:
     parser.add_argument(
         "--domain-id",
         type=int,
-        default=0,
+        default=DEFAULT_DOMAIN_ID,
         help="DDS domain ID",
     )
 
